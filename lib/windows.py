@@ -1,7 +1,6 @@
 import win32api
 import win32print
 from lib import pdf
-from lib import rotatepdf
 
 class Printing(object):
     def print(self,printer_data, orientation, printer):
