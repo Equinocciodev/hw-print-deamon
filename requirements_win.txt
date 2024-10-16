@@ -1,0 +1,7 @@
+flask
+flask-cors
+wmi
+python-dotenv
+fpdf
+pdfkit
+pywin32

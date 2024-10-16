@@ -1,0 +1,1 @@
+call "C:\hw-print-deamon\python\python.exe" "C:\hw-print-deamon\main.py"
