@@ -6,6 +6,7 @@ import pdfkit
 def generate(printer_data, orientation):
     current_working_directory = os.getcwd()
     pdf_dir = os.path.join(current_working_directory, "pdf")
+    wkhtmltopdf_dir = os.path.join(current_working_directory, "bin", "wkhtmltopdf.exe")
     
     os.makedirs(pdf_dir, exist_ok=True)
     
@@ -13,8 +14,7 @@ def generate(printer_data, orientation):
     pdf_file = os.path.join(pdf_dir, filename)
     
     # Configuration for wkhtmltopdf
-    path_wkhtmltopdf = r'C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe'  # Update this path as needed
-    config = pdfkit.configuration(wkhtmltopdf=path_wkhtmltopdf)
+    config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_dir)
     
     if orientation == 'landscape':
         margin_top = '0in',
