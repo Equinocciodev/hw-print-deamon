@@ -50,4 +50,4 @@ class Printing(object):
         for proc in psutil.process_iter(['pid', 'name']):
             if proc.info['name'] and proc.info['name'] in ('Acrobat.exe'):
                 proc.terminate()
-                proc.wait(timeout=60)
+                proc.wait(timeout=8)
