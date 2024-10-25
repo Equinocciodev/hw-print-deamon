@@ -79,9 +79,18 @@ def generate(form):
         'margin-bottom': margin_bottom,
         'margin-left': margin_left,
         'header-spacing': header_spacing,
-    }
-    print(options)
 
+    }
+    paper_format = form.get('format')
+    if paper_format:
+        if paper_format != "custom":
+            options['page-size'] = paper_format
+        else:
+            if form.get('page_width') and form.get('page_height'):
+                options['page-width'] = form.get('page_width') + 'mm'
+                options['page-height'] = form.get('page_height') + 'mm'
+
+    print(options)
 
     # Convert HTML to PDF
     pdfkit.from_string(html_content, pdf_file, configuration=config, options=options)
