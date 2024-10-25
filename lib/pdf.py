@@ -29,8 +29,8 @@ def generate(form):
     font_size = '17px'
     font_family = "'Calibri', sans-serif"
     orientation = 'portrait'
-    line_height = 'auto'
-    letter_spacing = 'auto'
+    line_height = 'initial'
+    letter_spacing = 'initial'
     header_spacing = '0'
     if str(form.get('orientation')).lower() == 'landscape':
         orientation = 'landscape'
@@ -40,9 +40,9 @@ def generate(form):
         margin_left = '0.4in'
         font_size = '13px'
         font_family = "'Courier New', Courier, monospace"
-        letter_spacing = 'auto'
+        letter_spacing = 'initial'
         header_spacing = '0'
-        line_height = '1.5'
+        line_height = 'initial'
 
     margin_top = margin_top if not form.get('margin_top') else form.get('margin_top') + 'mm'
     if form.get('margin_top'):
@@ -89,7 +89,7 @@ def generate(form):
             if form.get('page_width') and form.get('page_height') and form.get('page_width') != '0' and form.get('page_height') != '0':
                 options['page-width'] = form.get('page_width') + 'mm'
                 options['page-height'] = form.get('page_height') + 'mm'
-
+    print(options)
     # Convert HTML to PDF
     pdfkit.from_string(html_content, pdf_file, configuration=config, options=options)
 
