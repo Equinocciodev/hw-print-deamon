@@ -14,6 +14,7 @@ def generate(form):
         wkhtmltopdf_dir = os.path.join("/usr/local/bin/wkhtmltopdf")
         wkhtmltopdf_dir = os.path.join(current_working_directory, "bin", "wkhtmltopdf")
     config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_dir)
+    printer_data=form.get('printer_data')
 
     os.makedirs(pdf_dir, exist_ok=True)
 
@@ -29,6 +30,7 @@ def generate(form):
     font_family = "'Calibri', sans-serif"
     orientation = 'portrait'
     letter_spacing = 'auto'
+    header_spacing = '0'
     if str(form.get('orientation')).lower() == 'landscape':
         orientation = 'landscape'
         margin_top = '0in'
@@ -38,6 +40,7 @@ def generate(form):
         font_size = '13px'
         font_family = "'Courier New', Courier, monospace"
         letter_spacing = 'auto'
+        header_spacing = '0'
 
     margin_top = margin_top if not form.get('margin_top') else form.get('margin_top') + 'mm'
     margin_right = margin_right if not form.get('margin_right') else form.get('margin_right') + 'mm'
@@ -58,17 +61,18 @@ def generate(form):
         </style>
     </head>
     <body>
-        {form.get('printer_data')}
+        {printer_data}
     </body>
     </html>
     """
-    # print(html_content)
+    print(html_content)
     options = {
         'orientation': f'{orientation}',
         'margin-top': margin_top,
         'margin-right': margin_right,
         'margin-bottom': margin_bottom,
         'margin-left': margin_left,
+        'header-spacing': header_spacing,
     }
 
     # Convert HTML to PDF
