@@ -4,25 +4,25 @@ from datetime import datetime
 import pdfkit
 from sys import platform
 
-
 def generate(form):
-    current_working_directory = os.getcwd()
-    pdf_dir = os.path.join(current_working_directory, "pdf")
+    cwd = os.getcwd()
+    pdf_dir = os.path.join(cwd, "pdf")
+    os.makedirs(pdf_dir, exist_ok=True)
     # Configuration for wkhtmltopdf
-    wkhtmltopdf_dir = os.path.join(current_working_directory, "bin", "wkhtmltopdf.exe")
+    wkhtmltopdf_dir = os.path.join(cwd, "bin", "wkhtmltopdf.exe")
     if platform == 'darwin':
         wkhtmltopdf_dir = os.path.join("/usr/local/bin/wkhtmltopdf")
-        wkhtmltopdf_dir = os.path.join(current_working_directory, "bin", "wkhtmltopdf")
+        if not os.path.join("/usr/local/bin/wkhtmltopdf"):
+            wkhtmltopdf_dir = os.path.join(cwd, "bin", "wkhtmltopdf")
+
     config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_dir)
     printer_data=form.get('printer_data')
-
-    os.makedirs(pdf_dir, exist_ok=True)
 
     filename = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p") + str(uuid.uuid4()) + '.pdf'
     pdf_file = os.path.join(pdf_dir, filename)
 
     # default values
-    margin_top = '0in',
+    margin_top = '0in'
     margin_right = '0.3in'
     margin_bottom = '0in'
     margin_left = '0.3in'
@@ -71,7 +71,7 @@ def generate(form):
     </body>
     </html>
     """
-    #print(html_content)
+
     options = {
         'orientation': f'{orientation}',
         'margin-top': margin_top,
@@ -82,15 +82,13 @@ def generate(form):
 
     }
     paper_format = form.get('format')
-    if paper_format:
+    if paper_format and paper_format != '0':
         if paper_format != "custom":
             options['page-size'] = paper_format
         else:
-            if form.get('page_width') and form.get('page_height'):
+            if form.get('page_width') and form.get('page_height') and form.get('page_width') != '0' and form.get('page_height') != '0':
                 options['page-width'] = form.get('page_width') + 'mm'
                 options['page-height'] = form.get('page_height') + 'mm'
-
-    print(options)
 
     # Convert HTML to PDF
     pdfkit.from_string(html_content, pdf_file, configuration=config, options=options)

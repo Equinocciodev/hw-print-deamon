@@ -31,23 +31,21 @@ class Printing(object):
         
         self.close_adobe_reader()
 
-    def do_print(self,form):
-        current_working_directory = os.getcwd()
-        pdf_file = pdf.generate(form)
-        cmd_orientation = '-portrait'
-        if str(form.get('orientation')).lower() == 'landscape':
-            cmd_orientation='-landscape'
-        printer=form.get('printer')
-        gspath = os.path.join(current_working_directory, "bin", "ghostscript.exe")
-        gsp_path = os.path.join(current_working_directory, "bin", "gsprint.exe")
-        win32api.ShellExecute(0, 'open', gsp_path,
-                              '-ghostscript "' + gspath + '" '+cmd_orientation+ ' -printer "' + printer + '" "%s"' % (pdf_file), '.', 0)
-
-
-
-    
     def close_adobe_reader(self):
         for proc in psutil.process_iter(['pid', 'name']):
             if proc.info['name'] and proc.info['name'] in ('Acrobat.exe'):
                 proc.terminate()
                 proc.wait(timeout=8)
+
+    def do_print(self,form):
+        cwd = os.getcwd()
+        pdf_file = pdf.generate(form)
+        cmd_orientation = '-portrait'
+        if str(form.get('orientation')).lower() == 'landscape':
+            cmd_orientation='-landscape'
+        printer=form.get('printer')
+        gspath = os.path.join(cwd, "bin", "ghostscript.exe")
+        gsp_path = os.path.join(cwd, "bin", "gsprint.exe")
+        win32api.ShellExecute(0, 'open', gsp_path,
+                              '-ghostscript "' + gspath + '" '+cmd_orientation+ ' -printer "' + printer + '" "%s"' % (pdf_file), '.', 0)
+
