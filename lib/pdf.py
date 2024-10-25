@@ -29,6 +29,7 @@ def generate(form):
     font_size = '17px'
     font_family = "'Calibri', sans-serif"
     orientation = 'portrait'
+    line_height = 'auto'
     letter_spacing = 'auto'
     header_spacing = '0'
     if str(form.get('orientation')).lower() == 'landscape':
@@ -41,14 +42,19 @@ def generate(form):
         font_family = "'Courier New', Courier, monospace"
         letter_spacing = 'auto'
         header_spacing = '0'
+        line_height = '1.5'
 
     margin_top = margin_top if not form.get('margin_top') else form.get('margin_top') + 'mm'
+    if form.get('margin_top'):
+        printer_data=printer_data.replace('<pre class="custom_font_properties">', '').replace('</pre>', '')
     margin_right = margin_right if not form.get('margin_right') else form.get('margin_right') + 'mm'
     margin_left = margin_left if not form.get('margin_left') else form.get('margin_left') + 'mm'
     margin_bottom = margin_bottom if not form.get('margin_bottom') else form.get('margin_bottom') + 'mm'
     font_family = font_family if not form.get('font_family') else form.get('font_family')
+    line_height = line_height if not form.get('line_height') else form.get('line_height')
     font_size = font_size if not form.get('font_size') else form.get('font_size') + 'px'
     letter_spacing = letter_spacing if not form.get('letter_spacing') else form.get('letter_spacing') + 'px'
+    header_spacing = header_spacing if not form.get('header_spacing') else form.get('header_spacing')
 
     html_content = f"""
     <!DOCTYPE html>
@@ -57,7 +63,7 @@ def generate(form):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-size: {font_size}; font-family: {font_family};letter-spacing: {letter_spacing};}}
+            body {{ font-size: {font_size}; font-family: {font_family}, sans-serif;letter-spacing: {letter_spacing}; line-height: {line_height};}}
         </style>
     </head>
     <body>
@@ -65,7 +71,7 @@ def generate(form):
     </body>
     </html>
     """
-    print(html_content)
+    #print(html_content)
     options = {
         'orientation': f'{orientation}',
         'margin-top': margin_top,
@@ -74,6 +80,8 @@ def generate(form):
         'margin-left': margin_left,
         'header-spacing': header_spacing,
     }
+    print(options)
+
 
     # Convert HTML to PDF
     pdfkit.from_string(html_content, pdf_file, configuration=config, options=options)
