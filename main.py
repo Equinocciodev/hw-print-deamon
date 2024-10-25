@@ -23,7 +23,7 @@ def index():
     return jsonify({'status': 'OK'})
 
 @app.route('/v2/dotmatrix/print/', methods=['POST'])
-def index():
+def v2_dot_matrix_print():
     config = dotenv_values(".env")
     if not request.form.get('printer'):
         request.form['printer'] = config.get('PRINTER')
