@@ -1,0 +1,8 @@
+flask
+flask-cors
+fpdf
+pdfkit
+psutil
+python-dotenv
+wmi; sys_platform == 'win32'
+pywin32; sys_platform == 'win32'

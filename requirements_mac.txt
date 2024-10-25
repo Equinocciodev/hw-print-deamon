@@ -1,6 +1,0 @@
-flask
-flask-cors
-python-dotenv
-fpdf
-pdfkit
-psutil

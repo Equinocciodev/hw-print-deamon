@@ -1,13 +1,14 @@
 import win32api
 import win32print
+import os
 import psutil
 import time
 from lib import pdf
 
 class Printing(object):
-    def print(self,printer_data, orientation, printer):
-        pdf_file = pdf.generate(printer_data, orientation)
-        print(printer)
+    def do_print_old(self,form):
+        pdf_file = pdf.generate(form)
+        printer=form.get('printer')
         win32print.SetDefaultPrinter(printer)
         
         printer_handle = win32print.OpenPrinter(printer)
@@ -15,11 +16,9 @@ class Printing(object):
         devmode = printer_info['pDevMode']
         
         # rundll32 printui.dll,PrintUIEntry /e /n "EPSON LX-350 ESC/P" # Usar en caso de emergecia
-        if orientation == 'landscape':
-            devmode.PaperSize = 75  # "Fanfold 11 x 8 1/2 in"
-        elif orientation == 'portrait':
-            devmode.PaperSize = 1 # "Letter"
-            
+        devmode.PaperSize = 1 #letter
+        if str(form.get('orientation')).lower() == 'landscape':
+            devmode.PaperSize = 75
         try:
             win32print.SetPrinter(printer_handle, 2, printer_info, 0)
         except:
@@ -32,11 +31,23 @@ class Printing(object):
         
         self.close_adobe_reader()
 
-    def get_printers(self):
-        return win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL, None, 1)
+    def do_print(self,form):
+        current_working_directory = os.getcwd()
+        pdf_file = pdf.generate(form)
+        cmd_orientation = '-portrait'
+        if str(form.get('orientation')).lower() == 'landscape':
+            cmd_orientation='-landscape'
+        printer=form.get('printer')
+        gspath = os.path.join(current_working_directory, "bin", "ghostscript.exe")
+        gsp_path = os.path.join(current_working_directory, "bin", "gsprint.exe")
+        win32api.ShellExecute(0, 'open', gsp_path,
+                              '-ghostscript "' + gspath + '" '+cmd_orientation+ ' -printer "' + printer + '" "%s"' % (pdf_file), '.', 0)
+
+
+
     
     def close_adobe_reader(self):
         for proc in psutil.process_iter(['pid', 'name']):
-            if proc.info['name'] and 'Acrobat.exe' in proc.info['name']:
+            if proc.info['name'] and proc.info['name'] in ('Acrobat.exe'):
                 proc.terminate()
-                proc.wait(timeout=8) 
+                proc.wait(timeout=60)

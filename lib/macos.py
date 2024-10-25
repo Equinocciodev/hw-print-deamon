@@ -1,15 +1,14 @@
 import os
-import subprocess
-
 from lib import pdf
 
-
 class Printing(object):
-    
-    def print(self, printer_data, printer):
-        pdf_file = pdf.generate(printer_data)
-        command="lpr -P " + printer + " " + pdf_file
-        os.system(command)
+    def do_print(self, options):
+        pdf_file = pdf.generate(options)
 
-    def get_printers(self):
-        return subprocess.getoutput("lpstat -a | awk '{print $1}'").split("\n")
+        if str(options.get('orientation')).lower() == 'landscape':
+            cmd_orientation = '-o orientation-requested=4'
+        else:
+            cmd_orientation = ''
+        command = f"lpr {cmd_orientation} -P {options.get('printer')} {pdf_file}"
+        print(command)
+        os.system(command)
