@@ -1,25 +1,33 @@
 import os
 import uuid
 from datetime import datetime
-import pdfkit
 from sys import platform
 
-def generate(form):
-    cwd = os.getcwd()
-    pdf_dir = os.path.join(cwd, "pdf")
-    os.makedirs(pdf_dir, exist_ok=True)
-    # Configuration for wkhtmltopdf
-    wkhtmltopdf_dir = os.path.join(cwd, "bin", "wkhtmltopdf.exe")
-    if platform == 'darwin':
-        wkhtmltopdf_dir = os.path.join("/usr/local/bin/wkhtmltopdf")
-        if not os.path.join("/usr/local/bin/wkhtmltopdf"):
-            wkhtmltopdf_dir = os.path.join(cwd, "bin", "wkhtmltopdf")
+import pdfkit
 
-    config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_dir)
+CWD = os.getcwd()
+PDF_DIR = os.path.join(CWD, "pdf")
+def generate(form):
+    os.makedirs(PDF_DIR, exist_ok=True)
+    # Configuration for wkhtmltopdf
+    wkhtmltoPDF_DIR = None
+    if platform == 'win32' or platform == 'cygwin':
+        wkhtmltoPDF_DIR = os.path.join(CWD, "bin", "wkhtmltopdf.exe")
+    elif platform == 'darwin':
+        wkhtmltoPDF_DIR = os.path.join("/usr/local/bin/wkhtmltopdf")
+        if not os.path.join("/usr/local/bin/wkhtmltopdf"):
+            wkhtmltoPDF_DIR = os.path.join(CWD, "bin", "wkhtmltopdf")
+    elif platform == 'linux':
+        wkhtmltoPDF_DIR = os.path.join(CWD, "bin", "wkhtmltopdf")
+
+    if not os.path.exists(wkhtmltoPDF_DIR):
+        raise FileNotFoundError(f"wkhtmltopdf not found in {wkhtmltoPDF_DIR}")
+
+    config = pdfkit.configuration(wkhtmltopdf=wkhtmltoPDF_DIR)
     printer_data=form.get('printer_data')
 
     filename = datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p") + str(uuid.uuid4()) + '.pdf'
-    pdf_file = os.path.join(pdf_dir, filename)
+    pdf_file = os.path.join(PDF_DIR, filename)
 
     # default values
     margin_top = '0in'
@@ -94,3 +102,14 @@ def generate(form):
     pdfkit.from_string(html_content, pdf_file, configuration=config, options=options)
 
     return pdf_file
+
+
+def clear_pdfs():
+    for filename in os.listdir(PDF_DIR):
+        file_path = os.path.join(PDF_DIR, filename)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        except Exception as e:
+            return {'status': 'error', 'message': str(e)}
+    return {'status': 'OK', 'message': 'All PDFs cleared'}

@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 from lib import pdf
 
@@ -13,3 +14,7 @@ class Printing(object):
         command = f"lpr {cmd_orientation} -P {options.get('printer')} {pdf_file}"
         print(command)
         os.system(command)
+
+    def get_printers(self):
+        result = subprocess.run(['lpstat', '-p'], stdout=subprocess.PIPE)
+        return [line.split(' ')[1] for line in result.stdout.decode().split('\n') if line]
