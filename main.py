@@ -1,8 +1,10 @@
+import subprocess
 from sys import platform
+
+from dotenv import dotenv_values
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from dotenv import dotenv_values
-import subprocess
+
 if platform == 'darwin':
     from lib.macos import Printing
 else:
@@ -12,26 +14,24 @@ else:
 app = Flask(__name__)
 CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
-@app.route('/dotmatrix/print', methods=['POST'])
+
+
+@app.route('/')
 def index():
+    return jsonify({'status': 'OK'})
+
+@app.route('/dotmatrix/print', methods=['POST'])
+def dotmatrix_print():
     config = dotenv_values(".env")
     form =request.form.copy()
     if not request.form.get('printer'):
         form['printer'] = config.get('PRINTER_NAME')
 
-    Printing().do_print_old(form)
-
-    return jsonify({'status': 'OK'})
-
-@app.route('/v2/dotmatrix/print/', methods=['POST'])
-def v2_dot_matrix_print():
-    config = dotenv_values(".env")
-    form = request.form.copy()
-    if not request.form.get('printer'):
-        form['printer'] = config.get('PRINTER_NAME')
     Printing().do_print(form)
 
     return jsonify({'status': 'OK'})
+
+
 
 @app.route('/printers', methods=['GET'])
 def get_printers():

@@ -1,13 +1,11 @@
 import os
+
 from lib import pdf
 
-class Printing(object):
-    def do_print_old(self, form):
-        self.do_print(form)
 
+class Printing(object):
     def do_print(self, options):
         pdf_file = pdf.generate(options)
-
         if str(options.get('orientation')).lower() == 'landscape':
             cmd_orientation = '-o orientation-requested=4'
         else:
