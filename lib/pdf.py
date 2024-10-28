@@ -15,8 +15,8 @@ def generate(printer_data, orientation):
     
     # Configuration for wkhtmltopdf
     config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_dir)
-    
-    if orientation == 'landscape':
+    print(orientation)
+    if str(orientation).lower() == 'landscape':
         margin_top = '0in',
         margin_right = '0.78in',
         margin_bottom = '0in',
@@ -24,7 +24,7 @@ def generate(printer_data, orientation):
         font_size = '13px'
         font_family = "'Courier New', Courier, monospace"
         
-    elif orientation == 'portrait':
+    elif str(orientation).lower() == 'portrait':
         margin_top = '0in',
         margin_right = '0.3in',
         margin_bottom = '0in',
