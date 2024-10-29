@@ -4,26 +4,34 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Printing Demon{% endblock %}</title>
-    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/all.min.css') }}" rel="stylesheet">
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-light bg-light">
-    <a class="navbar-brand" href="/">Printing Demon</a>
+    <a class="navbar-brand" href="/pdf/list"><img src="{{ url_for('static', filename='favicon.png') }}" alt="PDF Icon"
+                                                  style="width: 32px; height: 32px; margin-right: 5px;">Printing
+        Demon</a>
     <div class="collapse navbar-collapse">
         <ul class="navbar-nav mr-auto">
+
             <li class="nav-item">
-                <a class="nav-link" href="/">Queu</a>
-            </li>
+                <a class="nav-link" href="/pdf/list">
+                    PDF List
+                </a></li>
             <li class="nav-item">
-                <a class="nav-link" href="/pdf/list">PDF List</a>
-            </li>
+                <a class="nav-link" href="/printers/select">
+                    Printers
+                </a></li>
         </ul>
     </div>
 </nav>
 <div class="container mt-5">
     {% block content %}{% endblock %}
 </div>
-<script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+<script src="{{ url_for('static', filename='js/jquery-3.5.1.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+
 {% block scripts %}{% endblock %}
 </body>
 </html>

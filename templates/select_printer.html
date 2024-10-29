@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Select Default Printer{% endblock %}
+
+{% block content %}
+    <h1 class="mb-4">Select Default Printer</h1>
+    {% if message %}
+        <div class="alert alert-success" role="alert">
+            {{ message }}
+        </div>
+    {% endif %}
+    <ul class="list-group">
+        {% for printer in printers %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <div>
+                    <i class="fas fa-print" style="margin-right: 5px;"></i>
+                    {{ printer }}
+                </div>
+                <div>
+                    {% if printer == default_printer %}
+                        <i class="fas fa-check" style="color: green;"></i>
+                    {% else %}
+                        <form method="post" style="display: inline;">
+                            <input type="hidden" name="printer" value="{{ printer }}">
+                            <button type="submit" class="btn btn-primary btn-sm">Set as Default</button>
+                        </form>
+                    {% endif %}
+                </div>
+            </li>
+        {% endfor %}
+    </ul>
+{% endblock %}
