@@ -1,5 +1,5 @@
 import os
-import platform  # Correct import for platform module
+import platform
 import subprocess
 import time
 
@@ -131,7 +131,6 @@ def select_printer():
         selected_printer = request.form.get('printer')
         save_default_printer(selected_printer)
         message = f'{selected_printer} has been set as the default printer.'
-
     printers = Printing().get_printers()
     config = dotenv_values(".env")
     default_printer = config.get('PRINTER_NAME')
