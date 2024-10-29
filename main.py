@@ -1,23 +1,52 @@
 import os
-from sys import platform
+import platform  # Correct import for platform module
+import subprocess
+import time
 
+import psutil
 from dotenv import dotenv_values
 from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_cors import CORS
 
 from lib.pdf import clear_pdfs
 
-if platform == 'darwin':
+if platform.system() == 'Darwin':
     from lib.macos import Printing
-elif platform == 'linux':
+elif platform.system() == 'Linux':
     from lib.linux import Printing
 else:
     from lib.windows import Printing
 
+start_time = time.time()
+pdf_processed_count = 0
 app = Flask(__name__)
 CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
+
+@app.route('/', methods=['GET'])
+@app.route('/dashboard', methods=['GET'])
+def dashboard():
+    global pdf_processed_count
+    uptime = time.time() - start_time
+    commit_info = subprocess.check_output(['git', 'log', '-1', '--format=%H %cd'], universal_newlines=True).strip()
+    commit_hash, commit_date = commit_info.split(' ', 1)
+    memory_info = psutil.virtual_memory()
+    process = psutil.Process(os.getpid())
+    process_memory_usage = process.memory_info().rss  # Resident Set Size (RSS) in bytes
+    os_info = f"{platform.system()} {platform.release()} ({platform.version()})"
+    project_info = {
+        'os': os_info,
+        'python_version': platform.python_version(),
+        'commit_hash': commit_hash,
+        'commit_date': commit_date,
+        'uptime': uptime,
+        'pdf_processed_count': pdf_processed_count,
+        'memory_usage': process_memory_usage / (1024 ** 2)  # Convert bytes to MB
+    }
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify(project_info=project_info)
+    return render_template('dashboard.html', project_info=project_info)
 @app.route('/api/status', methods=['GET'])
 def api_status():
     return jsonify({'status': 'OK'})
@@ -25,10 +54,12 @@ def api_status():
 @app.route('/api/print', methods=['POST'])
 @app.route('/dotmatrix/print', methods=['POST'])
 def api_print():
+    global pdf_processed_count
     config = dotenv_values(".env")
     form = request.form.copy()
     form.setdefault('printer', config.get('PRINTER_NAME'))
     Printing().do_print(form)
+    pdf_processed_count += 1
     return jsonify({'status': 'OK', 'message': 'Print job added to queue'})
 
 @app.route('/api/printers', methods=['GET'])
@@ -62,7 +93,6 @@ def download_pdf(filename):
 def pdf_clear():
     return jsonify(clear_pdfs())
 
-
 def save_default_printer(printer_name):
     lines = []
     if os.path.exists('.env'):
@@ -80,7 +110,6 @@ def save_default_printer(printer_name):
         if not found:
             file.write(f'PRINTER_NAME={printer_name}\n')
 
-
 @app.route('/printers/select', methods=['GET', 'POST'])
 def select_printer():
     message = None
@@ -93,5 +122,7 @@ def select_printer():
     config = dotenv_values(".env")
     default_printer = config.get('PRINTER_NAME')
     return render_template('select_printer.html', printers=printers, default_printer=default_printer, message=message)
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=8000)

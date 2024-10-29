@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+    <h1 class="mb-4">Dashboard</h1>
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i class="fas fa-desktop fa-3x"></i>
+                    <h5 class="card-title mt-2">OS</h5>
+                    <p class="card-text" id="os">{{ project_info.os }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i class="fas fa-code fa-3x"></i>
+                    <h5 class="card-title mt-2">Python Version</h5>
+                    <p class="card-text" id="python_version">{{ project_info.python_version }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i class="fas fa-hashtag fa-3x"></i>
+                    <h5 class="card-title mt-2">Commit Hash</h5>
+                    <p class="card-text" id="commit_hash">{{ project_info.commit_hash }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mt-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i class="fas fa-calendar-alt fa-3x"></i>
+                    <h5 class="card-title mt-2">Commit Date</h5>
+                    <p class="card-text" id="commit_date">{{ project_info.commit_date }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mt-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i class="fas fa-clock fa-3x"></i>
+                    <h5 class="card-title mt-2">Uptime</h5>
+                    <p class="card-text" id="uptime">{{ project_info.uptime | int }} seconds</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mt-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i class="fas fa-file-pdf fa-3x"></i>
+                    <h5 class="card-title mt-2">PDFs Processed</h5>
+                    <p class="card-text" id="pdf_processed_count">{{ project_info.pdf_processed_count }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mt-4">
+            <div class="card text-center">
+                <div class="card-body">
+                    <i class="fas fa-memory fa-3x"></i>
+                    <h5 class="card-title mt-2">Memory Usage</h5>
+                    <p class="card-text" id="memory_usage">{{ project_info.memory_usage | round(2) }} MB</p>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        function refreshDashboard() {
+            fetch('/dashboard', {
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('os').innerText = data.project_info.os;
+                    document.getElementById('python_version').innerText = data.project_info.python_version;
+                    document.getElementById('commit_hash').innerText = data.project_info.commit_hash;
+                    document.getElementById('commit_date').innerText = data.project_info.commit_date;
+                    document.getElementById('uptime').innerText = Math.floor(data.project_info.uptime) + ' seconds';
+                    document.getElementById('pdf_processed_count').innerText = data.project_info.pdf_processed_count;
+                    document.getElementById('memory_usage').innerText = data.project_info.memory_usage.toFixed(2) + ' MB';
+                });
+        }
+
+        setInterval(refreshDashboard, 5000); // Refresh every 5 seconds
+    </script>
+{% endblock %}
