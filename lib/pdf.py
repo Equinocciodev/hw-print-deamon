@@ -11,13 +11,13 @@ PDF_DIR = os.path.join(CWD, "pdf")
 
 def generate(form):
     os.makedirs(PDF_DIR, exist_ok=True)
-    wkhtmltoPDF_DIR = os.path.join(CWD, "bin", "wkhtmltopdf.exe") if platform in ['win32', 'cygwin'] else \
+    wkhtmltopdf_dir = os.path.join(CWD, "bin", "wkhtmltopdf.exe") if platform in ['win32', 'cygwin'] else \
         os.path.join("/usr/local/bin/wkhtmltopdf") if platform == 'darwin' else \
             os.path.join(CWD, "bin", "wkhtmltopdf")
-    if not os.path.exists(wkhtmltoPDF_DIR):
-        raise FileNotFoundError(f"wkhtmltopdf not found in {wkhtmltoPDF_DIR}")
+    if not os.path.exists(wkhtmltopdf_dir):
+        raise FileNotFoundError(f"wkhtmltopdf not found in {wkhtmltopdf_dir}")
 
-    config = pdfkit.configuration(wkhtmltopdf=wkhtmltoPDF_DIR)
+    config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_dir)
     printer_data = form.get('printer_data')
     filename = f"{datetime.now().strftime('%Y_%m_%d-%I_%M_%S_%p')}{uuid.uuid4()}.pdf"
     pdf_file = os.path.join(PDF_DIR, filename)
