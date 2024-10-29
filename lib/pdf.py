@@ -8,6 +8,7 @@ import pdfkit
 CWD = os.getcwd()
 PDF_DIR = os.path.join(CWD, "pdf")
 
+
 def generate(form):
     os.makedirs(PDF_DIR, exist_ok=True)
     wkhtmltoPDF_DIR = os.path.join(CWD, "bin", "wkhtmltopdf.exe") if platform in ['win32', 'cygwin'] else \
@@ -67,6 +68,7 @@ def generate(form):
 
     pdfkit.from_string(html_content, pdf_file, configuration=config, options=options)
     return pdf_file
+
 
 def clear_pdfs():
     for filename in os.listdir(PDF_DIR):

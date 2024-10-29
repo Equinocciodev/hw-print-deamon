@@ -24,18 +24,15 @@ CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
 
-@app.route('/', methods=['GET'])
-@app.route('/dashboard', methods=['GET'])
-def dashboard():
+def get_info():
     global pdf_processed_count
     uptime = time.time() - start_time
     commit_info = subprocess.check_output(['git', 'log', '-1', '--format=%H %cd'], universal_newlines=True).strip()
     commit_hash, commit_date = commit_info.split(' ', 1)
-    memory_info = psutil.virtual_memory()
     process = psutil.Process(os.getpid())
     process_memory_usage = process.memory_info().rss  # Resident Set Size (RSS) in bytes
     os_info = f"{platform.system()} {platform.release()} ({platform.version()})"
-    project_info = {
+    return {
         'os': os_info,
         'python_version': platform.python_version(),
         'commit_hash': commit_hash,
@@ -44,12 +41,23 @@ def dashboard():
         'pdf_processed_count': pdf_processed_count,
         'memory_usage': process_memory_usage / (1024 ** 2)  # Convert bytes to MB
     }
-    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-        return jsonify(project_info=project_info)
-    return render_template('dashboard.html', project_info=project_info)
+
+
+@app.route('/', methods=['GET'])
+@app.route('/dashboard', methods=['GET'])
+def dashboard():
+    return render_template('dashboard.html', project_info=get_info())
+
+
 @app.route('/api/status', methods=['GET'])
-def api_status():
+def api():
     return jsonify({'status': 'OK'})
+
+
+@app.route('/api', methods=['GET'])
+def api_status():
+    return jsonify(project_info=get_info())
+
 
 @app.route('/api/print', methods=['POST'])
 @app.route('/dotmatrix/print', methods=['POST'])
@@ -61,6 +69,7 @@ def api_print():
     Printing().do_print(form)
     pdf_processed_count += 1
     return jsonify({'status': 'OK', 'message': 'Print job added to queue'})
+
 
 @app.route('/api/printers', methods=['GET'])
 @app.route('/printers', methods=['GET'])
@@ -75,6 +84,7 @@ def get_printers():
 
     return jsonify({'printers': printers})
 
+
 @app.route('/pdf/list', methods=['GET'])
 def get_pdf_list():
     pdf_dir = 'pdf'
@@ -85,13 +95,16 @@ def get_pdf_list():
     pdfs_paginated = pdfs[start:start + per_page]
     return render_template('pdf_list.html', pdfs=pdfs_paginated, page=page, total=len(pdfs), per_page=per_page)
 
+
 @app.route('/pdf/<filename>', methods=['GET'])
 def download_pdf(filename):
     return send_from_directory('pdf', filename)
 
+
 @app.route('/pdf/clear', methods=['POST'])
 def pdf_clear():
     return jsonify(clear_pdfs())
+
 
 def save_default_printer(printer_name):
     lines = []
@@ -109,6 +122,7 @@ def save_default_printer(printer_name):
                 file.write(line)
         if not found:
             file.write(f'PRINTER_NAME={printer_name}\n')
+
 
 @app.route('/printers/select', methods=['GET', 'POST'])
 def select_printer():
