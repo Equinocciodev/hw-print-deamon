@@ -18,4 +18,4 @@ class Printing:
                               f'-ghostscript "{gspath}" {cmd_orientation} -printer "{printer}" "{pdf_file}"', '.', 0)
 
     def get_printers(self):
-        return [printer[2] for printer in win32print.EnumPrinters(2)]
+        return [printer[2] for printer in (win32print.EnumPrinters(2) + win32print.EnumPrinters(4))]

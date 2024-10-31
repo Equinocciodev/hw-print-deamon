@@ -24,9 +24,11 @@ def generate(form):
 
     orientation = 'landscape' if form.get('orientation', '').lower() == 'landscape' else 'portrait'
     margins = {
-        'portrait': {'top': '0in', 'right': '0.3in', 'bottom': '0in', 'left': '0.3in', 'font_size': '17px',
-                     'font_family': "'Calibri', sans-serif"},
-        'landscape': {'top': '0in', 'right': '0.78in', 'bottom': '0in', 'left': '0.4in', 'font_size': '13px',
+        'portrait': {'margin_top': '0in', 'margin_right': '0.3in', 'margin_bottom': '0in', 'margin_left': '0.3in',
+                     'font_size': '9',
+                     'font_family': "'Arial', sans-serif"},
+        'landscape': {'margin_top': '0in', 'margin_right': '0.78in', 'margin_bottom': '0in', 'margin_left': '0.4in',
+                      'font_size': '13',
                       'font_family': "'Courier New', Courier, monospace"}
     }
     margin = margins[orientation]
@@ -36,6 +38,9 @@ def generate(form):
         {k: form.get(k) for k in ['font_family', 'line_height', 'font_size', 'letter_spacing', 'header_spacing'] if
          form.get(k)})
 
+    if form.get('margin_top'):
+        printer_data = printer_data.replace('<pre class="custom_font_properties">', '').replace('</pre>', '')
+
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -43,7 +48,7 @@ def generate(form):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-size: {margin['font_size']}; font-family: {margin['font_family']}; letter-spacing: {margin.get('letter_spacing', 'initial')}; line-height: {margin.get('line_height', 'initial')}; }}
+            body {{ font-size: {margin['font_size']}px; font-family: {margin['font_family']}; letter-spacing: {margin.get('letter_spacing', 'initial')}px; line-height: {margin.get('line_height', 'initial')}; }}
         </style>
     </head>
     <body>
@@ -52,14 +57,17 @@ def generate(form):
     </html>
     """
 
+
     options = {
         'orientation': orientation,
-        'margin-top': margin['top'],
-        'margin-right': margin['right'],
-        'margin-bottom': margin['bottom'],
-        'margin-left': margin['left'],
+        'margin-top': margin['margin_top'],
+        'margin-right': margin['margin_right'],
+        'margin-bottom': margin['margin_bottom'],
+        'margin-left': margin['margin_left'],
         'header-spacing': margin.get('header_spacing', '0')
     }
+    print(margin)
+    print(options)
     if form.get('format') and form.get('format') != '0':
         if form.get('format') != "custom":
             options['page-size'] = form.get('format')

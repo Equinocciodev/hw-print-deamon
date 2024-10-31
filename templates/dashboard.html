@@ -23,24 +23,8 @@
                 </div>
             </div>
         </div>
-        <div class="col-md-4">
-            <div class="card text-center">
-                <div class="card-body">
-                    <i class="fas fa-hashtag fa-3x"></i>
-                    <h5 class="card-title mt-2">Commit Hash</h5>
-                    <p class="card-text" id="commit_hash">{{ project_info.commit_hash }}</p>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4 mt-4">
-            <div class="card text-center">
-                <div class="card-body">
-                    <i class="fas fa-calendar-alt fa-3x"></i>
-                    <h5 class="card-title mt-2">Commit Date</h5>
-                    <p class="card-text" id="commit_date">{{ project_info.commit_date }}</p>
-                </div>
-            </div>
-        </div>
+
+
         <div class="col-md-4 mt-4">
             <div class="card text-center">
                 <div class="card-body">
@@ -83,8 +67,6 @@
                 .then(data => {
                     document.getElementById('os').innerText = data.project_info.os;
                     document.getElementById('python_version').innerText = data.project_info.python_version;
-                    document.getElementById('commit_hash').innerText = data.project_info.commit_hash;
-                    document.getElementById('commit_date').innerText = data.project_info.commit_date;
                     document.getElementById('uptime').innerText = Math.floor(data.project_info.uptime) + ' seconds';
                     document.getElementById('pdf_processed_count').innerText = data.project_info.pdf_processed_count;
                     document.getElementById('memory_usage').innerText = data.project_info.memory_usage.toFixed(2) + ' MB';

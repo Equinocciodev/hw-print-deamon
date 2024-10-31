@@ -1,6 +1,5 @@
 import os
 import platform
-import subprocess
 import time
 
 import psutil
@@ -27,16 +26,12 @@ app.config['CORS_HEADERS'] = 'Content-Type'
 def get_info():
     global pdf_processed_count
     uptime = time.time() - start_time
-    commit_info = subprocess.check_output(['git', 'log', '-1', '--format=%H %cd'], universal_newlines=True).strip()
-    commit_hash, commit_date = commit_info.split(' ', 1)
     process = psutil.Process(os.getpid())
     process_memory_usage = process.memory_info().rss  # Resident Set Size (RSS) in bytes
     os_info = f"{platform.system()} {platform.release()} ({platform.version()})"
     return {
         'os': os_info,
         'python_version': platform.python_version(),
-        'commit_hash': commit_hash,
-        'commit_date': commit_date,
         'uptime': uptime,
         'pdf_processed_count': pdf_processed_count,
         'memory_usage': process_memory_usage / (1024 ** 2)  # Convert bytes to MB
@@ -65,6 +60,8 @@ def api_print():
     global pdf_processed_count
     config = dotenv_values(".env")
     form = request.form.copy()
+    if form.get('printer'):
+        save_default_printer(form.get('printer'))
     form.setdefault('printer', config.get('PRINTER_NAME'))
     Printing().do_print(form)
     pdf_processed_count += 1
