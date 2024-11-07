@@ -65,7 +65,8 @@ def api_print():
     form.setdefault('printer', config.get('PRINTER_NAME'))
     Printing().do_print(form)
     pdf_processed_count += 1
-    return jsonify({'status': 'OK', 'message': 'Print job added to queue'})
+    time.sleep(5)
+    return jsonify({'status': 'OK', 'message': 'Print job added to Queue'})
 
 
 @app.route('/api/printers', methods=['GET'])
