@@ -167,7 +167,7 @@ class PrinterQueue:
             # For dot-matrix printers, try Ghostscript method first
             if any(model in job.printer_name.upper() for model in ['FX-2190', 'LX-350', 'ESC/P']):
                 logger.info(f"Detected dot-matrix printer {job.printer_name}, using Ghostscript method")
-                if self._print_pdf_ghostscript(job.pdf_file, job.printer_name, job.orientation):
+                if self._print_pdf_ghostscript(job.pdf_file, job.printer_name, devmode_data, job.orientation):
                     success = True
                 else:
                     logger.warning("Ghostscript method failed, trying native method")
@@ -199,7 +199,35 @@ class PrinterQueue:
             self.current_job = None
             self.is_processing = False
     
-    def _print_pdf_ghostscript(self, pdf_file: str, printer_name: str, orientation: str = 'portrait') -> bool:
+    def _extract_orientation_from_devmode(self, devmode_data: bytes) -> str:
+        """Extract orientation from DEVMODE data"""
+        try:
+            if not devmode_data or len(devmode_data) < 78:
+                logger.info(f"entrando aqui")
+                return 'portrait'  # Default fallback
+            
+            # Extract dmFields to check if orientation is set
+            dm_fields = int.from_bytes(devmode_data[72:76], 'little')
+            DM_ORIENTATION = 0x00000001
+            
+            if dm_fields & DM_ORIENTATION:
+                # Extract dmOrientation (offset 76, 2 bytes)
+                orientation_value = int.from_bytes(devmode_data[76:78], 'little', signed=True)
+                # DMORIENT_PORTRAIT = 1, DMORIENT_LANDSCAPE = 2
+                logger.info(f"o entrando aqui")
+                logger.info(f"orientation{orientation_value}")
+                return 'landscape' if orientation_value == 2 else 'portrait'
+            
+            else:
+                logger.info(f"o aqui x2")
+                return 'portrait'  # Default if orientation not set
+                
+        except Exception as e:
+            logger.warning(f"Error extracting orientation from DEVMODE: {e}")
+            logger.info(f"entrando al falló")
+            return 'portrait'  # Safe fallback
+    
+    def _print_pdf_ghostscript(self, pdf_file: str, printer_name: str, devmode_data: bytes = None, orientation: str = 'portrait') -> bool:
         """Print PDF using Ghostscript/gsprint for better compatibility with dot-matrix printers"""
         try:
             import os
@@ -218,8 +246,12 @@ class PrinterQueue:
                 logger.error(f"ghostscript.exe not found at {gspath}")
                 return False
             
+            # Extract orientation from DEVMODE if available, otherwise use parameter
+            actual_orientation = self._extract_orientation_from_devmode(devmode_data) if devmode_data else orientation
+            logger.info(f"Using orientation: {actual_orientation} (from {'DEVMODE' if devmode_data else 'parameter'})")
+            
             # Set orientation parameter
-            cmd_orientation = '-landscape' if orientation.lower() == 'landscape' else '-portrait'
+            cmd_orientation = '-landscape' if actual_orientation.lower() == 'landscape' else '-portrait'
             
             # Build gsprint command
             cmd = [
