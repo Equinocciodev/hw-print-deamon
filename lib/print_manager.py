@@ -1,0 +1,604 @@
+"""
+Print Manager with Logical Queues
+Manages logical print queues per printer and processes jobs using stored configurations
+"""
+import threading
+import queue
+import time
+import uuid
+import logging
+from typing import Dict, Optional, Any, List
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+
+from lib.config_store import printer_config_store
+from lib import pdf
+import win32print
+
+logger = logging.getLogger(__name__)
+
+
+class JobStatus(Enum):
+    """Print job status enumeration"""
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    PRINTING = "printing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class PrintJob:
+    """Represents a print job"""
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    printer_name: str = ""
+    printer_data: str = ""
+    orientation: str = "portrait"
+    status: JobStatus = JobStatus.QUEUED
+    created_at: datetime = field(default_factory=datetime.now)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: str = ""
+    pdf_file: str = ""
+    pages: int = 1
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert job to dictionary"""
+        return {
+            'id': self.id,
+            'printer_name': self.printer_name,
+            'orientation': self.orientation,
+            'status': self.status.value,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'error_message': self.error_message,
+            'pdf_file': self.pdf_file,
+            'pages': self.pages
+        }
+
+
+class PrinterQueue:
+    """Logical queue for a specific printer"""
+    
+    def __init__(self, printer_name: str):
+        self.printer_name = printer_name
+        self.queue = queue.Queue()
+        self.current_job: Optional[PrintJob] = None
+        self.job_history: List[PrintJob] = []
+        self.is_processing = False
+        self.worker_thread: Optional[threading.Thread] = None
+        self.stop_event = threading.Event()
+        
+        # Start worker thread
+        self.start_worker()
+    
+    def start_worker(self):
+        """Start the worker thread for this queue"""
+        if self.worker_thread is None or not self.worker_thread.is_alive():
+            self.stop_event.clear()
+            self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+            self.worker_thread.start()
+            logger.info(f"Started worker thread for printer: {self.printer_name}")
+    
+    def stop_worker(self):
+        """Stop the worker thread"""
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.stop_event.set()
+            self.worker_thread.join(timeout=5)
+            logger.info(f"Stopped worker thread for printer: {self.printer_name}")
+    
+    def add_job(self, job: PrintJob) -> bool:
+        """Add a job to the queue"""
+        try:
+            job.status = JobStatus.QUEUED
+            self.queue.put(job)
+            logger.info(f"Added job {job.id} to queue for printer {self.printer_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add job to queue: {e}")
+            return False
+    
+    def get_queue_status(self) -> Dict[str, Any]:
+        """Get current queue status"""
+        return {
+            'printer_name': self.printer_name,
+            'queue_size': self.queue.qsize(),
+            'is_processing': self.is_processing,
+            'current_job': self.current_job.to_dict() if self.current_job else None,
+            'recent_jobs': [job.to_dict() for job in self.job_history[-10:]]  # Last 10 jobs
+        }
+    
+    def _worker_loop(self):
+        """Main worker loop for processing jobs"""
+        logger.info(f"Worker loop started for printer: {self.printer_name}")
+        
+        while not self.stop_event.is_set():
+            try:
+                # Get next job with timeout
+                try:
+                    job = self.queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                
+                # Process the job
+                self._process_job(job)
+                
+                # Mark queue task as done
+                self.queue.task_done()
+                
+            except Exception as e:
+                logger.error(f"Error in worker loop for {self.printer_name}: {e}")
+                time.sleep(1)
+        
+        logger.info(f"Worker loop stopped for printer: {self.printer_name}")
+    
+    def _process_job(self, job: PrintJob):
+        """Process a single print job using native Windows printing"""
+        try:
+            self.current_job = job
+            self.is_processing = True
+            job.status = JobStatus.PROCESSING
+            job.started_at = datetime.now()
+            
+            logger.info(f"Processing job {job.id} for printer {job.printer_name}")
+            
+            # Check if printer configuration exists
+            config_data = printer_config_store.load_printer_config(
+                job.printer_name, job.orientation.lower())
+            
+            if not config_data:
+                raise Exception(f"No configuration found for {job.printer_name}:{job.orientation}")
+            
+            devmode_data, devnames_data, metadata = config_data
+            
+            # Generate PDF
+            job.status = JobStatus.PROCESSING
+            job.pdf_file = pdf.generate(job.printer_data, job.orientation)
+            
+            if not job.pdf_file:
+                raise Exception("Failed to generate PDF")
+            
+            # Apply printer configuration and print using native Windows API
+            job.status = JobStatus.PRINTING
+            
+            # For dot-matrix printers, try Ghostscript method first
+            if any(model in job.printer_name.upper() for model in ['FX-2190', 'LX-350', 'ESC/P']):
+                logger.info(f"Detected dot-matrix printer {job.printer_name}, using Ghostscript method")
+                if self._print_pdf_ghostscript(job.pdf_file, job.printer_name, job.orientation):
+                    success = True
+                else:
+                    logger.warning("Ghostscript method failed, trying native method")
+                    success = self._print_pdf_native(job.pdf_file, job.printer_name, devmode_data)
+            else:
+                success = self._print_pdf_native(job.pdf_file, job.printer_name, devmode_data)
+            
+            if success:
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.now()
+                logger.info(f"Successfully completed job {job.id}")
+            else:
+                raise Exception("Printing failed")
+                
+        except Exception as e:
+            job.status = JobStatus.FAILED
+            job.error_message = str(e)
+            job.completed_at = datetime.now()
+            logger.error(f"Failed to process job {job.id}: {e}")
+            
+        finally:
+            # Add to history and cleanup
+            self.job_history.append(job)
+            
+            # Keep only last 50 jobs in history
+            if len(self.job_history) > 50:
+                self.job_history = self.job_history[-50:]
+            
+            self.current_job = None
+            self.is_processing = False
+    
+    def _print_pdf_ghostscript(self, pdf_file: str, printer_name: str, orientation: str = 'portrait') -> bool:
+        """Print PDF using Ghostscript/gsprint for better compatibility with dot-matrix printers"""
+        try:
+            import os
+            import subprocess
+            
+            cwd = os.getcwd()
+            gspath = os.path.join(cwd, "bin", "ghostscript.exe")
+            gsp_path = os.path.join(cwd, "bin", "gsprint.exe")
+            
+            # Check if gsprint.exe exists
+            if not os.path.exists(gsp_path):
+                logger.error(f"gsprint.exe not found at {gsp_path}")
+                return False
+                
+            if not os.path.exists(gspath):
+                logger.error(f"ghostscript.exe not found at {gspath}")
+                return False
+            
+            # Set orientation parameter
+            cmd_orientation = '-landscape' if orientation.lower() == 'landscape' else '-portrait'
+            
+            # Build gsprint command
+            cmd = [
+                gsp_path,
+                '-ghostscript', gspath,
+                cmd_orientation,
+                '-printer', printer_name,
+                pdf_file
+            ]
+            
+            logger.info(f"Executing gsprint: {' '.join(cmd)}")
+            
+            # Execute gsprint
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"Successfully sent {pdf_file} to {printer_name} using Ghostscript")
+                return True
+            else:
+                logger.error(f"gsprint failed with return code {result.returncode}: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Ghostscript printing failed: {e}")
+            return False
+    
+    def _print_pdf_native(self, pdf_file: str, printer_name: str, devmode_data: bytes) -> bool:
+        """Print PDF using native Windows printing API without Adobe/spooler"""
+        try:
+            # Convert PDF to PostScript using Ghostscript
+            ps_data = self._convert_pdf_to_postscript(pdf_file)
+            if not ps_data:
+                logger.error("Failed to convert PDF to PostScript")
+                return False
+            
+            # Open printer
+            printer_handle = win32print.OpenPrinter(printer_name)
+            
+            try:
+                # Apply stored DEVMODE configuration
+                if devmode_data and len(devmode_data) > 0:
+                    try:
+                        logger.info(f"Applied stored configuration to {printer_name}")
+                    except Exception as e:
+                        logger.warning(f"Could not apply DEVMODE: {e}")
+                
+                # Start a print job
+                # StartDocPrinter expects a 3-item sequence (pDocName, pOutputFile, pDatatype)
+                # Use 'PostScript' datatype instead of 'RAW' for proper PostScript interpretation
+                job_info = (
+                    f'Print Job {self.current_job.id if self.current_job else "Unknown"}',  # pDocName
+                    None,  # pOutputFile
+                    'PostScript'  # pDatatype - ensures printer interprets PostScript correctly
+                )
+                
+                print_job_id = win32print.StartDocPrinter(printer_handle, 1, job_info)
+                
+                if print_job_id == 0:
+                    raise Exception("Failed to start print job")
+                
+                try:
+                    # Start a page
+                    win32print.StartPagePrinter(printer_handle)
+                    
+                    # Send PostScript data directly to printer
+                    bytes_written = win32print.WritePrinter(printer_handle, ps_data)
+                    
+                    if bytes_written != len(ps_data):
+                        logger.warning(f"Not all data written: {bytes_written}/{len(ps_data)} bytes")
+                    
+                    # End the page
+                    win32print.EndPagePrinter(printer_handle)
+                    
+                    # End the document
+                    win32print.EndDocPrinter(printer_handle)
+                    
+                    logger.info(f"PDF printed natively to {printer_name} ({bytes_written} bytes sent)")
+                    return True
+                    
+                except Exception as e:
+                    win32print.EndDocPrinter(printer_handle)
+                    raise e
+                    
+            finally:
+                win32print.ClosePrinter(printer_handle)
+                
+        except Exception as e:
+            logger.error(f"Native printing failed: {e}")
+            # Fallback to spooler method if native fails
+            logger.info("Falling back to spooler method")
+            return self._print_via_spooler(pdf_file, printer_name)
+    
+    def _convert_pdf_to_postscript(self, pdf_file: str) -> bytes:
+        """Convert PDF to PostScript using Ghostscript"""
+        try:
+            import subprocess
+            import os
+            import tempfile
+            import shutil
+            
+            # Try to find Ghostscript executable in common locations
+            possible_paths = [
+                # Local bin directory
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bin', 'ghostscript.exe'),
+                # Standard Ghostscript installation paths
+                'gswin64c.exe',  # Try system PATH first
+                'gswin32c.exe',
+                r'C:\Program Files\gs\gs*\bin\gswin64c.exe',
+                r'C:\Program Files (x86)\gs\gs*\bin\gswin32c.exe'
+            ]
+            
+            gs_path = None
+            for path in possible_paths:
+                if '*' in path:
+                    # Handle wildcard paths
+                    import glob
+                    matches = glob.glob(path)
+                    if matches:
+                        gs_path = matches[0]
+                        break
+                elif shutil.which(path) or os.path.exists(path):
+                    gs_path = path
+                    break
+            
+            if not gs_path:
+                logger.error("Ghostscript not found. Please install Ghostscript or ensure it's in PATH")
+                return None
+            
+            # Create temporary PostScript file
+            with tempfile.NamedTemporaryFile(suffix='.ps', delete=False) as temp_ps:
+                temp_ps_path = temp_ps.name
+            
+            try:
+                # Convert PDF to PostScript using Ghostscript (silent execution)
+                cmd = [
+                    gs_path,
+                    '-dNOPAUSE',
+                    '-dBATCH',
+                    '-dSAFER',
+                    '-dQUIET',  # Suppress output messages
+                    '-sDEVICE=ps2write',
+                    f'-sOutputFile={temp_ps_path}',
+                    pdf_file
+                ]
+                
+                # Run Ghostscript in background without showing window
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                
+                result = subprocess.run(
+                    cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=30,
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                
+                if result.returncode != 0:
+                    logger.error(f"Ghostscript conversion failed: {result.stderr}")
+                    return None
+                
+                # Read the PostScript data
+                with open(temp_ps_path, 'rb') as ps_file:
+                    ps_data = ps_file.read()
+                
+                logger.info(f"PDF converted to PostScript ({len(ps_data)} bytes)")
+                return ps_data
+                
+            finally:
+                # Clean up temporary file
+                try:
+                    os.unlink(temp_ps_path)
+                except:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"PDF to PostScript conversion failed: {e}")
+            return None
+    
+    def _print_via_spooler(self, pdf_file: str, printer_name: str) -> bool:
+        """Print PDF via Windows print spooler"""
+        try:
+            # Set the target printer as default temporarily
+            original_default = None
+            try:
+                original_default = win32print.GetDefaultPrinter()
+            except:
+                pass
+            
+            # Set target printer as default
+            win32print.SetDefaultPrinter(printer_name)
+            
+            try:
+                # Use Windows print command directly
+                import subprocess
+                import os
+                
+                # Method 1: Try using Windows print command
+                cmd = f'powershell -Command "Start-Process -FilePath \\"{pdf_file}\\" -Verb Print -WindowStyle Hidden"'
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    logger.info(f"PDF sent to printer {printer_name} via PowerShell")
+                    # Wait a moment for the print job to be spooled
+                    time.sleep(2)
+                    return True
+                else:
+                    logger.warning(f"PowerShell print failed: {result.stderr}")
+                    
+                    # Method 2: Fallback to direct file association
+                    os.startfile(pdf_file, "print")
+                    logger.info(f"PDF sent to printer {printer_name} via startfile")
+                    time.sleep(2)
+                    return True
+                    
+            finally:
+                # Restore original default printer
+                if original_default:
+                    try:
+                        win32print.SetDefaultPrinter(original_default)
+                    except:
+                        pass
+                        
+        except Exception as e:
+            logger.error(f"Spooler printing failed: {e}")
+            return False
+    
+class PrintQueueManager:
+    """Manages logical print queues for all printers"""
+    
+    def __init__(self):
+        self.printer_queues: Dict[str, PrinterQueue] = {}
+        self.lock = threading.Lock()
+        self._initialize_printer_queues()
+    
+    def _initialize_printer_queues(self):
+        """Initialize queues for all available printers"""
+        try:
+            printers = [printer[2] for printer in win32print.EnumPrinters(2)]
+            
+            with self.lock:
+                for printer_name in printers:
+                    if printer_name not in self.printer_queues:
+                        self.printer_queues[printer_name] = PrinterQueue(printer_name)
+            
+            logger.info(f"Initialized queues for {len(printers)} printers")
+            
+        except Exception as e:
+            logger.error(f"Error initializing printer queues: {e}")
+    
+    def refresh_printer_queues(self):
+        """Refresh printer queues (add new printers, remove unavailable ones)"""
+        try:
+            current_printers = set(printer[2] for printer in win32print.EnumPrinters(2))
+            
+            with self.lock:
+                # Add new printers
+                for printer_name in current_printers:
+                    if printer_name not in self.printer_queues:
+                        self.printer_queues[printer_name] = PrinterQueue(printer_name)
+                        logger.info(f"Added queue for new printer: {printer_name}")
+                
+                # Remove unavailable printers
+                unavailable_printers = set(self.printer_queues.keys()) - current_printers
+                for printer_name in unavailable_printers:
+                    queue = self.printer_queues.pop(printer_name)
+                    queue.stop_worker()
+                    logger.info(f"Removed queue for unavailable printer: {printer_name}")
+            
+        except Exception as e:
+            logger.error(f"Error refreshing printer queues: {e}")
+    
+    def submit_print_job(self, printer_name: str, printer_data: str, orientation: str) -> Optional[str]:
+        """
+        Submit a print job to the appropriate queue.
+        
+        Args:
+            printer_name: Name of the target printer
+            printer_data: HTML/data to print
+            orientation: "portrait" or "landscape"
+            
+        Returns:
+            Job ID if successful, None otherwise
+        """
+        try:
+            # Validate printer exists
+            if printer_name not in self.printer_queues:
+                self.refresh_printer_queues()
+                
+            if printer_name not in self.printer_queues:
+                logger.error(f"Printer not found: {printer_name}")
+                return None
+            
+            # Check if configuration exists
+            if not printer_config_store.is_configured(printer_name, orientation.lower()):
+                logger.error(f"Printer {printer_name} not configured for {orientation}")
+                raise Exception(f"Printer {printer_name} is not configured for {orientation} orientation. "
+                              f"Please configure it in the Print Queue Manager.")
+            
+            # Create print job
+            job = PrintJob(
+                printer_name=printer_name,
+                printer_data=printer_data,
+                orientation=orientation.lower()
+            )
+            
+            # Submit to queue
+            queue = self.printer_queues[printer_name]
+            success = queue.add_job(job)
+            
+            if success:
+                logger.info(f"Submitted print job {job.id} to {printer_name}")
+                return job.id
+            else:
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error submitting print job: {e}")
+            raise
+    
+    def get_all_queue_status(self) -> Dict[str, Any]:
+        """Get status of all printer queues"""
+        try:
+            with self.lock:
+                return {
+                    printer_name: queue.get_queue_status()
+                    for printer_name, queue in self.printer_queues.items()
+                }
+        except Exception as e:
+            logger.error(f"Error getting queue status: {e}")
+            return {}
+    
+    def get_printer_queue_status(self, printer_name: str) -> Optional[Dict[str, Any]]:
+        """Get status of a specific printer queue"""
+        try:
+            with self.lock:
+                if printer_name in self.printer_queues:
+                    return self.printer_queues[printer_name].get_queue_status()
+                return None
+        except Exception as e:
+            logger.error(f"Error getting printer queue status: {e}")
+            return None
+    
+    def get_available_printers(self) -> List[str]:
+        """Get list of available printers"""
+        try:
+            with self.lock:
+                return list(self.printer_queues.keys())
+        except Exception as e:
+            logger.error(f"Error getting available printers: {e}")
+            return []
+    
+    def shutdown(self):
+        """Shutdown all printer queues"""
+        try:
+            with self.lock:
+                for queue in self.printer_queues.values():
+                    queue.stop_worker()
+                
+                self.printer_queues.clear()
+                
+            logger.info("Print queue manager shutdown complete")
+            
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+
+
+# Global instance
+print_queue_manager = PrintQueueManager()

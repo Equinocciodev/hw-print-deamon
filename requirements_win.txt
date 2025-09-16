@@ -6,3 +6,5 @@ fpdf
 pdfkit
 pywin32
 psutil
+PyQt6
+requests
