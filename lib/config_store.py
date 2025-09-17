@@ -11,6 +11,283 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class PDFConfigStore:
+    """
+    Stores PDF configuration parameters.
+    Handles settings like page size, margins, orientation, etc.
+    """
+    
+    def __init__(self, config_dir: str = "pdf_configs"):
+        """
+        Initialize PDF configuration store.
+        
+        Args:
+            config_dir: Directory to store PDF configuration files
+        """
+        self.config_dir = config_dir
+        self.config_file = os.path.join(config_dir, "pdf_configs.json")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(config_dir, exist_ok=True)
+        
+        # Load existing configurations
+        self.configs = self._load_configs()
+    
+    def _load_configs(self) -> Dict[str, Any]:
+        """Load PDF configurations from disk."""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Error loading PDF configs: {e}")
+                return {}
+        return {}
+    
+    def _save_configs(self):
+        """Save PDF configurations to disk."""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.configs, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error saving PDF configs: {e}")
+    
+    def save_pdf_config(self, config_name: str, **kwargs) -> bool:
+        """
+        Save PDF configuration.
+        
+        Args:
+            config_name: Name of the configuration
+            **kwargs: PDF parameters (page_size, margins, orientation, etc.)
+            
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        try:
+            self.configs[config_name] = {
+                'config_name': config_name,
+                'page_size': kwargs.get('page_size', 'A4'),
+                'orientation': kwargs.get('orientation', 'portrait'),
+                'margin_top': kwargs.get('margin_top', 20),
+                'margin_bottom': kwargs.get('margin_bottom', 20),
+                'margin_left': kwargs.get('margin_left', 20),
+                'margin_right': kwargs.get('margin_right', 20),
+                'font_size': kwargs.get('font_size', 12),
+                'font_family': kwargs.get('font_family', 'Arial'),
+                'quality': kwargs.get('quality', 'high'),
+                'compression': kwargs.get('compression', True),
+                'last_modified': str(os.path.getmtime(self.config_file)) if os.path.exists(self.config_file) else ""
+            }
+            
+            self._save_configs()
+            logger.info(f"Saved PDF config: {config_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving PDF config: {e}")
+            return False
+    
+    def load_pdf_config(self, config_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Load PDF configuration.
+        
+        Args:
+            config_name: Name of the configuration
+            
+        Returns:
+            Configuration dictionary or None if not found
+        """
+        try:
+            if config_name in self.configs:
+                logger.info(f"Loaded PDF config: {config_name}")
+                return self.configs[config_name]
+            else:
+                logger.warning(f"PDF config not found: {config_name}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error loading PDF config: {e}")
+            return None
+    
+    def get_all_pdf_configs(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all PDF configurations.
+        
+        Returns:
+            Dictionary with all PDF configurations
+        """
+        return self.configs.copy()
+    
+    def delete_pdf_config(self, config_name: str) -> bool:
+        """
+        Delete PDF configuration.
+        
+        Args:
+            config_name: Name of the configuration to delete
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        try:
+            if config_name in self.configs:
+                del self.configs[config_name]
+                self._save_configs()
+                logger.info(f"Deleted PDF config: {config_name}")
+                return True
+            else:
+                logger.warning(f"PDF config not found for deletion: {config_name}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error deleting PDF config: {e}")
+            return False
+
+class PDFOrientationConfigStore:
+    """
+    Stores PDF orientation-specific parameters (margins, fonts, etc.)
+    Handles landscape and portrait configurations separately.
+    """
+    
+    def __init__(self, config_dir: str = "pdf_configs"):
+        """
+        Initialize PDF orientation configuration store.
+        
+        Args:
+            config_dir: Directory to store PDF configuration files
+        """
+        self.config_dir = config_dir
+        self.config_file = os.path.join(config_dir, "pdf_orientation_configs.json")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(config_dir, exist_ok=True)
+        
+        # Default configurations
+        self.default_configs = {
+            'landscape': {
+                'margin_top': '0in',
+                'margin_right': '0.78in',
+                'margin_bottom': '0in',
+                'margin_left': '0.4in',
+                'font_size': '13px',
+                'font_family': "'Courier New', Courier, monospace",
+                'top': '0px'
+            },
+            'portrait': {
+                'margin_top': '0in',
+                'margin_right': '0.3in',
+                'margin_bottom': '0in',
+                'margin_left': '0.3in',
+                'font_size': '17px',
+                'font_family': "'Calibri', sans-serif",
+                'top': '0px'
+            }
+        }
+        
+        # Load existing configurations
+        self.configs = self._load_configs()
+    
+    def _load_configs(self) -> Dict[str, Dict[str, str]]:
+        """Load PDF orientation configurations from disk."""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    loaded_configs = json.load(f)
+                    # Merge with defaults to ensure all keys exist
+                    for orientation in self.default_configs:
+                        if orientation not in loaded_configs:
+                            loaded_configs[orientation] = self.default_configs[orientation].copy()
+                        else:
+                            # Ensure all default keys exist
+                            for key, value in self.default_configs[orientation].items():
+                                if key not in loaded_configs[orientation]:
+                                    loaded_configs[orientation][key] = value
+                    return loaded_configs
+            except Exception as e:
+                logger.error(f"Error loading PDF orientation configs: {e}")
+                return self.default_configs.copy()
+        return self.default_configs.copy()
+    
+    def _save_configs(self):
+        """Save PDF orientation configurations to disk."""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.configs, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error saving PDF orientation configs: {e}")
+    
+    def get_orientation_config(self, orientation: str) -> Dict[str, str]:
+        """
+        Get configuration for specific orientation.
+        
+        Args:
+            orientation: 'landscape' or 'portrait'
+            
+        Returns:
+            Configuration dictionary for the orientation
+        """
+        orientation = orientation.lower()
+        if orientation in self.configs:
+            return self.configs[orientation].copy()
+        else:
+            logger.warning(f"Orientation config not found: {orientation}, using default")
+            return self.default_configs.get(orientation, {}).copy()
+    
+    def save_orientation_config(self, orientation: str, config: Dict[str, str]) -> bool:
+        """
+        Save configuration for specific orientation.
+        
+        Args:
+            orientation: 'landscape' or 'portrait'
+            config: Configuration dictionary
+            
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        try:
+            orientation = orientation.lower()
+            if orientation not in ['landscape', 'portrait']:
+                logger.error(f"Invalid orientation: {orientation}")
+                return False
+            
+            self.configs[orientation] = config.copy()
+            self._save_configs()
+            logger.info(f"Saved PDF orientation config: {orientation}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving PDF orientation config: {e}")
+            return False
+    
+    def reset_to_defaults(self, orientation: str = None) -> bool:
+        """
+        Reset configuration to defaults.
+        
+        Args:
+            orientation: Specific orientation to reset, or None for all
+            
+        Returns:
+            True if reset successfully, False otherwise
+        """
+        try:
+            if orientation:
+                orientation = orientation.lower()
+                if orientation in self.default_configs:
+                    self.configs[orientation] = self.default_configs[orientation].copy()
+                    logger.info(f"Reset PDF orientation config to default: {orientation}")
+                else:
+                    logger.error(f"Invalid orientation: {orientation}")
+                    return False
+            else:
+                self.configs = self.default_configs.copy()
+                logger.info("Reset all PDF orientation configs to defaults")
+            
+            self._save_configs()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error resetting PDF orientation config: {e}")
+            return False
+ 
 class PrinterConfigStore:
     """
     Stores printer configurations (DEVMODE + DEVNAMES) per printer and orientation.

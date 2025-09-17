@@ -9,13 +9,14 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QTableWidget, QTableWidgetItem, 
                             QPushButton, QLabel, QMessageBox, QTabWidget,
                             QTextEdit, QSplitter, QHeaderView, QProgressBar,
-                            QStatusBar, QGroupBox)
+                            QStatusBar, QGroupBox, QLineEdit, QComboBox,
+                            QFormLayout, QSpinBox, QDoubleSpinBox)
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QIcon, QFont
 import win32print
 import win32gui
 
-from lib.config_store import printer_config_store
+from lib.config_store import printer_config_store, PDFOrientationConfigStore
 from lib.win32_printdlgex import win32_print_wrapper
 from lib.alternative_printer_config import alternative_printer_config
 
@@ -415,6 +416,293 @@ class LogWidget(QWidget):
         self.log_display.clear()
 
 
+class PDFConfigWidget(QWidget):
+    """Widget for configuring PDF parameters by orientation"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pdf_config_store = PDFOrientationConfigStore()
+        self.init_ui()
+        self.load_current_configs()
+    
+    def init_ui(self):
+        """Initialize the PDF configuration UI"""
+        layout = QVBoxLayout()
+        
+        # Title
+        title_label = QLabel("Configuración de Parámetros PDF")
+        title_label.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+        
+        # Create horizontal layout for orientation configs
+        orientations_layout = QHBoxLayout()
+        
+        # Landscape configuration
+        landscape_group = QGroupBox("Configuración Horizontal (Landscape)")
+        landscape_layout = QFormLayout()
+        
+        self.landscape_margin_top = QLineEdit()
+        self.landscape_margin_right = QLineEdit()
+        self.landscape_margin_bottom = QLineEdit()
+        self.landscape_margin_left = QLineEdit()
+        self.landscape_font_size = QLineEdit()
+        self.landscape_font_family = QLineEdit()
+        self.landscape_top = QLineEdit()
+        
+        landscape_layout.addRow("Margen Superior:", self.landscape_margin_top)
+        landscape_layout.addRow("Margen Derecho:", self.landscape_margin_right)
+        landscape_layout.addRow("Margen Inferior:", self.landscape_margin_bottom)
+        landscape_layout.addRow("Margen Izquierdo:", self.landscape_margin_left)
+        landscape_layout.addRow("Tamaño de Fuente:", self.landscape_font_size)
+        landscape_layout.addRow("Familia de Fuente:", self.landscape_font_family)
+        landscape_layout.addRow("Posición Vertical (top):", self.landscape_top)
+        
+        landscape_group.setLayout(landscape_layout)
+        orientations_layout.addWidget(landscape_group)
+        
+        # Portrait configuration
+        portrait_group = QGroupBox("Configuración Vertical (Portrait)")
+        portrait_layout = QFormLayout()
+        
+        self.portrait_margin_top = QLineEdit()
+        self.portrait_margin_right = QLineEdit()
+        self.portrait_margin_bottom = QLineEdit()
+        self.portrait_margin_left = QLineEdit()
+        self.portrait_font_size = QLineEdit()
+        self.portrait_font_family = QLineEdit()
+        self.portrait_top = QLineEdit()
+        
+        portrait_layout.addRow("Margen Superior:", self.portrait_margin_top)
+        portrait_layout.addRow("Margen Derecho:", self.portrait_margin_right)
+        portrait_layout.addRow("Margen Inferior:", self.portrait_margin_bottom)
+        portrait_layout.addRow("Margen Izquierdo:", self.portrait_margin_left)
+        portrait_layout.addRow("Tamaño de Fuente:", self.portrait_font_size)
+        portrait_layout.addRow("Familia de Fuente:", self.portrait_font_family)
+        portrait_layout.addRow("Posición Vertical (top):", self.portrait_top)
+        
+        portrait_group.setLayout(portrait_layout)
+        orientations_layout.addWidget(portrait_group)
+        
+        layout.addLayout(orientations_layout)
+        
+        # Buttons
+        buttons_layout = QHBoxLayout()
+        
+        save_button = QPushButton("Guardar Configuración")
+        save_button.clicked.connect(self.save_configs)
+        buttons_layout.addWidget(save_button)
+        
+        reset_button = QPushButton("Restaurar Valores por Defecto")
+        reset_button.clicked.connect(self.reset_to_defaults)
+        buttons_layout.addWidget(reset_button)
+        
+        test_button = QPushButton("Probar Configuración")
+        test_button.clicked.connect(self.test_config)
+        buttons_layout.addWidget(test_button)
+        
+        layout.addLayout(buttons_layout)
+        
+        # Status label
+        self.status_label = QLabel("Listo para configurar")
+        self.status_label.setStyleSheet("color: blue; font-weight: bold;")
+        layout.addWidget(self.status_label)
+        
+        self.setLayout(layout)
+    
+    def load_current_configs(self):
+        """Load current configurations into the UI"""
+        try:
+            # Load landscape config
+            landscape_config = self.pdf_config_store.get_orientation_config('landscape')
+            self.landscape_margin_top.setText(landscape_config.get('margin_top', '0in'))
+            self.landscape_margin_right.setText(landscape_config.get('margin_right', '0.78in'))
+            self.landscape_margin_bottom.setText(landscape_config.get('margin_bottom', '0in'))
+            self.landscape_margin_left.setText(landscape_config.get('margin_left', '0.4in'))
+            self.landscape_font_size.setText(landscape_config.get('font_size', '13px'))
+            self.landscape_font_family.setText(landscape_config.get('font_family', "'Courier New', Courier, monospace"))
+            self.landscape_top.setText(landscape_config.get('top', '0px'))
+            
+            # Load portrait config
+            portrait_config = self.pdf_config_store.get_orientation_config('portrait')
+            self.portrait_margin_top.setText(portrait_config.get('margin_top', '0in'))
+            self.portrait_margin_right.setText(portrait_config.get('margin_right', '0.3in'))
+            self.portrait_margin_bottom.setText(portrait_config.get('margin_bottom', '0in'))
+            self.portrait_margin_left.setText(portrait_config.get('margin_left', '0.3in'))
+            self.portrait_font_size.setText(portrait_config.get('font_size', '17px'))
+            self.portrait_font_family.setText(portrait_config.get('font_family', "'Calibri', sans-serif"))
+            self.portrait_top.setText(portrait_config.get('top', '0px'))
+            
+            self.status_label.setText("Configuración cargada exitosamente")
+            self.status_label.setStyleSheet("color: green; font-weight: bold;")
+            
+        except Exception as e:
+            self.status_label.setText(f"Error cargando configuración: {str(e)}")
+            self.status_label.setStyleSheet("color: red; font-weight: bold;")
+            logger.error(f"Error loading PDF configs: {e}")
+    
+    def save_configs(self):
+        """Save current configurations"""
+        try:
+            # Save landscape config
+            landscape_config = {
+                'margin_top': self.landscape_margin_top.text().strip(),
+                'margin_right': self.landscape_margin_right.text().strip(),
+                'margin_bottom': self.landscape_margin_bottom.text().strip(),
+                'margin_left': self.landscape_margin_left.text().strip(),
+                'font_size': self.landscape_font_size.text().strip(),
+                'font_family': self.landscape_font_family.text().strip(),
+                'top': self.landscape_top.text().strip()
+            }
+            
+            # Save portrait config
+            portrait_config = {
+                'margin_top': self.portrait_margin_top.text().strip(),
+                'margin_right': self.portrait_margin_right.text().strip(),
+                'margin_bottom': self.portrait_margin_bottom.text().strip(),
+                'margin_left': self.portrait_margin_left.text().strip(),
+                'font_size': self.portrait_font_size.text().strip(),
+                'font_family': self.portrait_font_family.text().strip(),
+                'top': self.portrait_top.text().strip()
+            }
+            
+            # Validate inputs
+            if not self._validate_config(landscape_config, 'landscape'):
+                return
+            if not self._validate_config(portrait_config, 'portrait'):
+                return
+            
+            # Save configurations
+            landscape_success = self.pdf_config_store.save_orientation_config('landscape', landscape_config)
+            portrait_success = self.pdf_config_store.save_orientation_config('portrait', portrait_config)
+            
+            if landscape_success and portrait_success:
+                self.status_label.setText("Configuración guardada exitosamente")
+                self.status_label.setStyleSheet("color: green; font-weight: bold;")
+                QMessageBox.information(self, "Éxito", "Configuración de PDF guardada exitosamente")
+                logger.info("PDF configuration saved successfully")
+            else:
+                self.status_label.setText("Error guardando configuración")
+                self.status_label.setStyleSheet("color: red; font-weight: bold;")
+                QMessageBox.warning(self, "Error", "Error guardando la configuración de PDF")
+                
+        except Exception as e:
+            self.status_label.setText(f"Error: {str(e)}")
+            self.status_label.setStyleSheet("color: red; font-weight: bold;")
+            QMessageBox.critical(self, "Error", f"Error guardando configuración: {str(e)}")
+            logger.error(f"Error saving PDF configs: {e}")
+    
+    def _validate_config(self, config: dict, orientation: str) -> bool:
+        """Validate configuration parameters"""
+        try:
+            # Check required fields
+            required_fields = ['margin_top', 'margin_right', 'margin_bottom', 'margin_left', 'font_size', 'font_family']
+            for field in required_fields:
+                if not config.get(field, '').strip():
+                    QMessageBox.warning(self, "Error de Validación", 
+                                       f"El campo '{field}' es requerido para {orientation}")
+                    return False
+            
+            # Validate margin format (should contain 'in', 'cm', 'mm', 'px')
+            margin_fields = ['margin_top', 'margin_right', 'margin_bottom', 'margin_left']
+            for field in margin_fields:
+                value = config[field].strip()
+                if not any(unit in value for unit in ['in', 'cm', 'mm', 'px']):
+                    QMessageBox.warning(self, "Error de Validación", 
+                                       f"El margen '{field}' debe incluir unidad (in, cm, mm, px)")
+                    return False
+            
+            # Validate font size format (should contain 'px', 'pt', 'em')
+            font_size = config['font_size'].strip()
+            if not any(unit in font_size for unit in ['px', 'pt', 'em']):
+                QMessageBox.warning(self, "Error de Validación", 
+                                   "El tamaño de fuente debe incluir unidad (px, pt, em)")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Validación", f"Error validando configuración: {str(e)}")
+            return False
+    
+    def reset_to_defaults(self):
+        """Reset configurations to default values"""
+        try:
+            reply = QMessageBox.question(self, "Confirmar Reset", 
+                                       "¿Está seguro de que desea restaurar los valores por defecto?\n"
+                                       "Esto sobrescribirá la configuración actual.",
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                success = self.pdf_config_store.reset_to_defaults()
+                if success:
+                    self.load_current_configs()
+                    self.status_label.setText("Configuración restaurada a valores por defecto")
+                    self.status_label.setStyleSheet("color: green; font-weight: bold;")
+                    QMessageBox.information(self, "Éxito", "Configuración restaurada a valores por defecto")
+                    logger.info("PDF configuration reset to defaults")
+                else:
+                    self.status_label.setText("Error restaurando configuración")
+                    self.status_label.setStyleSheet("color: red; font-weight: bold;")
+                    QMessageBox.warning(self, "Error", "Error restaurando la configuración")
+                    
+        except Exception as e:
+            self.status_label.setText(f"Error: {str(e)}")
+            self.status_label.setStyleSheet("color: red; font-weight: bold;")
+            QMessageBox.critical(self, "Error", f"Error restaurando configuración: {str(e)}")
+            logger.error(f"Error resetting PDF configs: {e}")
+    
+    def test_config(self):
+        """Test current configuration by showing a preview"""
+        try:
+            # Get current values
+            landscape_config = {
+                'margin_top': self.landscape_margin_top.text().strip(),
+                'margin_right': self.landscape_margin_right.text().strip(),
+                'margin_bottom': self.landscape_margin_bottom.text().strip(),
+                'margin_left': self.landscape_margin_left.text().strip(),
+                'font_size': self.landscape_font_size.text().strip(),
+                'font_family': self.landscape_font_family.text().strip(),
+                'top': self.landscape_top.text().strip()
+            }
+            
+            portrait_config = {
+                'margin_top': self.portrait_margin_top.text().strip(),
+                'margin_right': self.portrait_margin_right.text().strip(),
+                'margin_bottom': self.portrait_margin_bottom.text().strip(),
+                'margin_left': self.portrait_margin_left.text().strip(),
+                'font_size': self.portrait_font_size.text().strip(),
+                'font_family': self.portrait_font_family.text().strip(),
+                'top': self.portrait_top.text().strip()
+            }
+            
+            # Show preview dialog
+            preview_text = f"""Configuración Actual de PDF:
+
+HORIZONTAL (Landscape):
+- Margen Superior: {landscape_config['margin_top']}
+- Margen Derecho: {landscape_config['margin_right']}
+- Margen Inferior: {landscape_config['margin_bottom']}
+- Margen Izquierdo: {landscape_config['margin_left']}
+- Tamaño de Fuente: {landscape_config['font_size']}
+- Familia de Fuente: {landscape_config['font_family']}
+- Posición Vertical (top): {landscape_config['top']}
+
+VERTICAL (Portrait):
+- Margen Superior: {portrait_config['margin_top']}
+- Margen Derecho: {portrait_config['margin_right']}
+- Margen Inferior: {portrait_config['margin_bottom']}
+- Margen Izquierdo: {portrait_config['margin_left']}
+- Tamaño de Fuente: {portrait_config['font_size']}
+- Familia de Fuente: {portrait_config['font_family']}
+- Posición Vertical (top): {portrait_config['top']}"""
+            
+            QMessageBox.information(self, "Vista Previa de Configuración", preview_text)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error mostrando vista previa: {str(e)}")
+            logger.error(f"Error testing PDF config: {e}")
+
+
 class PrintQueueManagerGUI(QMainWindow):
     """Main window for the Print Queue Manager"""
     
@@ -439,11 +727,13 @@ class PrintQueueManagerGUI(QMainWindow):
         
         # Create tabs
         self.printer_config_widget = PrinterConfigWidget(self)
+        self.pdf_config_widget = PDFConfigWidget(self)
         self.print_queue_widget = PrintQueueWidget(self)
         self.log_widget = LogWidget(self)
         
         # Add tabs
         self.tab_widget.addTab(self.printer_config_widget, "Printer Configuration")
+        self.tab_widget.addTab(self.pdf_config_widget, "Configuración PDF")
         self.tab_widget.addTab(self.print_queue_widget, "Print Queue")
         self.tab_widget.addTab(self.log_widget, "Logs")
         

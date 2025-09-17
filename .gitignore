@@ -29,6 +29,22 @@
 .idea/**/gradle.xml
 .idea/**/libraries
 
+#trae
+.trae/
+
+#github intrucciones
+.github/
+
+#vscode
+.vscode/
+
+Aquí tienes un prompt técnico focalizado.md
+call_to_api.js
+Desarrollar.md
+
+printer_configs/
+pdf_configs/
+
 # Gradle and Maven with auto-import
 # When using Gradle or Maven with auto-import, you should exclude module files,
 # since they will be recreated, and may cause churn.  Uncomment if using

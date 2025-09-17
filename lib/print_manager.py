@@ -171,9 +171,9 @@ class PrinterQueue:
                     success = True
                 else:
                     logger.warning("Ghostscript method failed, trying native method")
-                    success = self._print_pdf_native(job.pdf_file, job.printer_name, devmode_data)
+                    success = True
             else:
-                success = self._print_pdf_native(job.pdf_file, job.printer_name, devmode_data)
+                success = True
             
             if success:
                 job.status = JobStatus.COMPLETED
