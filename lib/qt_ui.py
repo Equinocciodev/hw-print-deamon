@@ -19,6 +19,7 @@ import win32gui
 from lib.config_store import printer_config_store, PDFOrientationConfigStore
 from lib.win32_printdlgex import win32_print_wrapper
 from lib.alternative_printer_config import alternative_printer_config
+from lib.print_manager import print_queue_manager
 
 logger = logging.getLogger(__name__)
 
@@ -233,16 +234,16 @@ class PrinterConfigWidget(QWidget):
         
         # Printers table
         self.printers_table = QTableWidget()
-        self.printers_table.setColumnCount(8)
+        self.printers_table.setColumnCount(9)
         self.printers_table.setHorizontalHeaderLabels([
-            "Printer Name", "Portrait", "Portrait Config", "Landscape", 
+            "Printer Name", "Type", "Portrait", "Portrait Config", "Landscape", 
             "Landscape Config", "Configure Portrait", "Configure Landscape", "Status"
         ])
         
         # Make some columns stretch
         header = self.printers_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)  # Printer name
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)  # Status
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)  # Status
         
         layout.addWidget(self.printers_table)
         
@@ -255,18 +256,28 @@ class PrinterConfigWidget(QWidget):
     def refresh_printers(self):
         """Refresh the list of available printers"""
         try:
-            # Get list of printers from Windows
-            printers = [printer[2] for printer in win32print.EnumPrinters(2)]
+            # Get list of printers with type information from print queue manager
+            printers_info = print_queue_manager.get_available_printers_with_info()
             
             # Get configurations for all printers
             all_configs = printer_config_store.get_all_configurations()
             
             # Update table
-            self.printers_table.setRowCount(len(printers))
+            self.printers_table.setRowCount(len(printers_info))
             
-            for row, printer_name in enumerate(printers):
+            for row, printer_info in enumerate(printers_info):
+                printer_name = printer_info['name']
+                printer_type = printer_info['type']
                 # Printer name
                 self.printers_table.setItem(row, 0, QTableWidgetItem(printer_name))
+                
+                # Printer type
+                type_display = {
+                    'local': '🖨️ Local',
+                    'network': '🌐 Network', 
+                    'shared': '🔗 Shared'
+                }.get(printer_type, f'❓ {printer_type}')
+                self.printers_table.setItem(row, 1, QTableWidgetItem(type_display))
                 
                 # Get configurations for this printer
                 printer_configs = all_configs.get(printer_name, {})
@@ -275,37 +286,37 @@ class PrinterConfigWidget(QWidget):
                 
                 # Portrait status
                 portrait_configured = portrait_config.get('is_configured', False)
-                self.printers_table.setItem(row, 1, QTableWidgetItem(
+                self.printers_table.setItem(row, 2, QTableWidgetItem(
                     "✓" if portrait_configured else "✗"))
                 
                 # Portrait configuration details
                 portrait_details = ""
                 if portrait_configured:
                     portrait_details = f"{portrait_config.get('paper_size', 'N/A')} | {portrait_config.get('color', 'N/A')}"
-                self.printers_table.setItem(row, 2, QTableWidgetItem(portrait_details))
+                self.printers_table.setItem(row, 3, QTableWidgetItem(portrait_details))
                 
                 # Landscape status
                 landscape_configured = landscape_config.get('is_configured', False)
-                self.printers_table.setItem(row, 3, QTableWidgetItem(
+                self.printers_table.setItem(row, 4, QTableWidgetItem(
                     "✓" if landscape_configured else "✗"))
                 
                 # Landscape configuration details
                 landscape_details = ""
                 if landscape_configured:
                     landscape_details = f"{landscape_config.get('paper_size', 'N/A')} | {landscape_config.get('color', 'N/A')}"
-                self.printers_table.setItem(row, 4, QTableWidgetItem(landscape_details))
+                self.printers_table.setItem(row, 5, QTableWidgetItem(landscape_details))
                 
                 # Configure Portrait button
                 portrait_btn = QPushButton("Configure")
                 portrait_btn.clicked.connect(
                     lambda checked, pname=printer_name: self.configure_printer(pname, "portrait"))
-                self.printers_table.setCellWidget(row, 5, portrait_btn)
+                self.printers_table.setCellWidget(row, 6, portrait_btn)
                 
                 # Configure Landscape button
                 landscape_btn = QPushButton("Configure")
                 landscape_btn.clicked.connect(
                     lambda checked, pname=printer_name: self.configure_printer(pname, "landscape"))
-                self.printers_table.setCellWidget(row, 6, landscape_btn)
+                self.printers_table.setCellWidget(row, 7, landscape_btn)
                 
                 # Overall status
                 status = "Ready"
@@ -316,10 +327,10 @@ class PrinterConfigWidget(QWidget):
                 else:
                     status = "Fully Configured"
                 
-                self.printers_table.setItem(row, 7, QTableWidgetItem(status))
+                self.printers_table.setItem(row, 8, QTableWidgetItem(status))
             
-            self.config_status.setText(f"Found {len(printers)} printers")
-            logger.info(f"Refreshed printer list: {len(printers)} printers found")
+            self.config_status.setText(f"Found {len(printers_info)} printers")
+            logger.info(f"Refreshed printer list: {len(printers_info)} printers found")
             
         except Exception as e:
             logger.error(f"Error refreshing printers: {e}")

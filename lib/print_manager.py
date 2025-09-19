@@ -65,6 +65,7 @@ class PrinterQueue:
     
     def __init__(self, printer_name: str):
         self.printer_name = printer_name
+        self.printer_type = "local"  # Default type, will be updated when detected
         self.queue = queue.Queue()
         self.current_job: Optional[PrintJob] = None
         self.job_history: List[PrintJob] = []
@@ -105,6 +106,7 @@ class PrinterQueue:
         """Get current queue status"""
         return {
             'printer_name': self.printer_name,
+            'printer_type': self.printer_type,
             'queue_size': self.queue.qsize(),
             'is_processing': self.is_processing,
             'current_job': self.current_job.to_dict() if self.current_job else None,
@@ -501,31 +503,102 @@ class PrintQueueManager:
         self._initialize_printer_queues()
     
     def _initialize_printer_queues(self):
-        """Initialize queues for all available printers"""
+        """Initialize queues for all available printers (local, shared, and network)"""
         try:
-            printers = [printer[2] for printer in win32print.EnumPrinters(2)]
+            all_printers = self._get_all_available_printers()
             
             with self.lock:
-                for printer_name in printers:
+                for printer_info in all_printers:
+                    printer_name = printer_info['name']
                     if printer_name not in self.printer_queues:
-                        self.printer_queues[printer_name] = PrinterQueue(printer_name)
+                        queue = PrinterQueue(printer_name)
+                        queue.printer_type = printer_info['type']  # Store printer type
+                        self.printer_queues[printer_name] = queue
             
-            logger.info(f"Initialized queues for {len(printers)} printers")
+            logger.info(f"Initialized queues for {len(all_printers)} printers (local, shared, and network)")
             
         except Exception as e:
             logger.error(f"Error initializing printer queues: {e}")
     
+    def _get_all_available_printers(self):
+        """Get all available printers including local, shared, and network printers"""
+        all_printers = []
+        
+        try:
+            # Get local printers (PRINTER_ENUM_LOCAL = 2)
+            local_printers = win32print.EnumPrinters(2)
+            for printer in local_printers:
+                all_printers.append({
+                    'name': printer[2],
+                    'type': 'local',
+                    'server': '',
+                    'comment': printer[1] if len(printer) > 1 else ''
+                })
+            
+            # Get network connections (PRINTER_ENUM_CONNECTIONS = 32)
+            try:
+                network_connections = win32print.EnumPrinters(32)
+                for printer in network_connections:
+                    all_printers.append({
+                        'name': printer[2],
+                        'type': 'network_connection',
+                        'server': printer[4] if len(printer) > 4 else '',
+                        'comment': printer[1] if len(printer) > 1 else ''
+                    })
+            except Exception as e:
+                logger.debug(f"No network connections found or error accessing them: {e}")
+            
+            # Get shared printers (PRINTER_ENUM_LOCAL | PRINTER_ENUM_SHARED = 2 | 4 = 6)
+            try:
+                shared_printers = win32print.EnumPrinters(6)
+                for printer in shared_printers:
+                    # Check if this printer is already in our list (avoid duplicates)
+                    if not any(p['name'] == printer[2] for p in all_printers):
+                        all_printers.append({
+                            'name': printer[2],
+                            'type': 'shared',
+                            'server': '',
+                            'comment': printer[1] if len(printer) > 1 else ''
+                        })
+            except Exception as e:
+                logger.debug(f"No shared printers found or error accessing them: {e}")
+            
+            logger.info(f"Found {len(all_printers)} total printers")
+            for printer in all_printers:
+                logger.debug(f"Printer: {printer['name']} (Type: {printer['type']})")
+                
+        except Exception as e:
+            logger.error(f"Error getting all available printers: {e}")
+            # Fallback to original method
+            try:
+                printers = win32print.EnumPrinters(2)
+                all_printers = [{
+                    'name': printer[2],
+                    'type': 'local',
+                    'server': '',
+                    'comment': printer[1] if len(printer) > 1 else ''
+                } for printer in printers]
+            except Exception as fallback_error:
+                logger.error(f"Fallback printer enumeration also failed: {fallback_error}")
+        
+        return all_printers
+    
     def refresh_printer_queues(self):
         """Refresh printer queues (add new printers, remove unavailable ones)"""
         try:
-            current_printers = set(printer[2] for printer in win32print.EnumPrinters(2))
+            # Get all available printers (local, network, and shared)
+            all_printers = self._get_all_available_printers()
+            current_printers = set(printer_info['name'] for printer_info in all_printers)
             
             with self.lock:
                 # Add new printers
-                for printer_name in current_printers:
+                for printer_info in all_printers:
+                    printer_name = printer_info['name']
                     if printer_name not in self.printer_queues:
-                        self.printer_queues[printer_name] = PrinterQueue(printer_name)
-                        logger.info(f"Added queue for new printer: {printer_name}")
+                        queue = PrinterQueue(printer_name)
+                        queue.printer_type = printer_info['type']  # Store printer type
+                        self.printer_queues[printer_name] = queue
+                        logger.info(f"Added queue for new {printer_info['type']} printer: {printer_name}")
                 
                 # Remove unavailable printers
                 unavailable_printers = set(self.printer_queues.keys()) - current_printers
@@ -615,6 +688,21 @@ class PrintQueueManager:
                 return list(self.printer_queues.keys())
         except Exception as e:
             logger.error(f"Error getting available printers: {e}")
+            return []
+    
+    def get_available_printers_with_info(self) -> List[Dict[str, str]]:
+        """Get list of available printers with their type information"""
+        try:
+            with self.lock:
+                return [
+                    {
+                        'name': printer_name,
+                        'type': queue.printer_type
+                    }
+                    for printer_name, queue in self.printer_queues.items()
+                ]
+        except Exception as e:
+            logger.error(f"Error getting available printers with info: {e}")
             return []
     
     def shutdown(self):
