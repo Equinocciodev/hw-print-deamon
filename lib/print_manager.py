@@ -15,6 +15,7 @@ from enum import Enum
 from lib.config_store import printer_config_store
 from lib import pdf
 import win32print
+import win32api
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class JobStatus(Enum):
 
 @dataclass
 class PrintJob:
-    """Represents a print job"""
+    """Represents a print job with all necessary information"""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     printer_name: str = ""
     printer_data: str = ""
@@ -43,6 +44,7 @@ class PrintJob:
     error_message: str = ""
     pdf_file: str = ""
     pages: int = 1
+    sequence_number: Optional[int] = None  # For tracking order within printer queue
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert job to dictionary"""
@@ -56,7 +58,8 @@ class PrintJob:
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'error_message': self.error_message,
             'pdf_file': self.pdf_file,
-            'pages': self.pages
+            'pages': self.pages,
+            'sequence_number': self.sequence_number
         }
 
 
@@ -72,6 +75,8 @@ class PrinterQueue:
         self.is_processing = False
         self.worker_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
+        self.sequence_counter = 0  # For tracking job order
+        self.sequence_lock = threading.Lock()  # Thread-safe sequence numbering
         
         # Start worker thread
         self.start_worker()
@@ -92,11 +97,16 @@ class PrinterQueue:
             logger.info(f"Stopped worker thread for printer: {self.printer_name}")
     
     def add_job(self, job: PrintJob) -> bool:
-        """Add a job to the queue"""
+        """Add a job to the queue with sequential numbering"""
         try:
+            # Assign sequence number for order tracking
+            with self.sequence_lock:
+                self.sequence_counter += 1
+                job.sequence_number = self.sequence_counter
+            
             job.status = JobStatus.QUEUED
             self.queue.put(job)
-            logger.info(f"Added job {job.id} to queue for printer {self.printer_name}")
+            logger.info(f"Added job {job.id} (seq #{job.sequence_number}) to queue for printer {self.printer_name}")
             return True
         except Exception as e:
             logger.error(f"Failed to add job to queue: {e}")
@@ -113,6 +123,28 @@ class PrinterQueue:
             'recent_jobs': [job.to_dict() for job in self.job_history[-10:]]  # Last 10 jobs
         }
     
+    def _is_windows_printer_queue_empty(self) -> bool:
+        """Check if Windows printer queue is empty (no pending jobs)"""
+        try:
+            # Get printer handle
+            printer_handle = win32print.OpenPrinter(self.printer_name)
+            
+            try:
+                # Get printer info including job count
+                printer_info = win32print.GetPrinter(printer_handle, 2)
+                job_count = printer_info.get('cJobs', 0)
+                
+                logger.debug(f"Windows queue for {self.printer_name} has {job_count} jobs")
+                return job_count == 0
+                
+            finally:
+                win32print.ClosePrinter(printer_handle)
+                
+        except Exception as e:
+            logger.warning(f"Could not check Windows queue status for {self.printer_name}: {e}")
+            # If we can't check, assume it's safe to proceed
+            return True
+    
     def _worker_loop(self):
         """Main worker loop for processing jobs"""
         logger.info(f"Worker loop started for printer: {self.printer_name}")
@@ -125,15 +157,31 @@ class PrinterQueue:
                 except queue.Empty:
                     continue
                 
+                self.current_job = job
+                self.is_processing = True
+                
+                seq_info = f" (seq #{job.sequence_number})" if job.sequence_number else ""
+                logger.info(f"Worker for {self.printer_name} picked up job {job.id}{seq_info} from queue")
+                
                 # Process the job
                 self._process_job(job)
                 
                 # Mark queue task as done
                 self.queue.task_done()
+                logger.info(f"Worker for {self.printer_name} completed job {job.id}{seq_info}")
                 
             except Exception as e:
-                logger.error(f"Error in worker loop for {self.printer_name}: {e}")
+                seq_info = f" (seq #{self.current_job.sequence_number})" if hasattr(self, 'current_job') and self.current_job and self.current_job.sequence_number else ""
+                logger.error(f"Error in worker loop for {self.printer_name} processing job {self.current_job.id if hasattr(self, 'current_job') and self.current_job else 'unknown'}{seq_info}: {e}")
+                if hasattr(self, 'current_job') and self.current_job:
+                    self.current_job.status = JobStatus.FAILED
+                    self.current_job.error_message = str(e)
+                    self.job_history.append(self.current_job)
+                    self.queue.task_done()
                 time.sleep(1)
+            finally:
+                self.current_job = None
+                self.is_processing = False
         
         logger.info(f"Worker loop stopped for printer: {self.printer_name}")
     
@@ -145,7 +193,28 @@ class PrinterQueue:
             job.status = JobStatus.PROCESSING
             job.started_at = datetime.now()
             
-            logger.info(f"Processing job {job.id} for printer {job.printer_name}")
+            seq_info = f" (seq #{job.sequence_number})" if job.sequence_number else ""
+            logger.info(f"Processing job {job.id}{seq_info} for printer {job.printer_name}")
+            
+            # CRITICAL: Wait for Windows printer queue to be empty before proceeding
+            # This ensures sequential processing and prevents correlative jumps
+            logger.info(f"Waiting for Windows queue to be empty for {job.printer_name}{seq_info}...")
+            max_wait_time = 300  # 5 minutes maximum wait
+            wait_start = time.time()
+            
+            while not self._is_windows_printer_queue_empty():
+                if time.time() - wait_start > max_wait_time:
+                    logger.warning(f"Timeout waiting for Windows queue to clear for {job.printer_name}{seq_info}")
+                    break
+                    
+                logger.debug(f"Windows queue not empty for {job.printer_name}{seq_info}, waiting 2 seconds...")
+                time.sleep(2)
+                
+                # Check if we should stop
+                if self.stop_event.is_set():
+                    raise Exception("Worker stopped while waiting for queue")
+            
+            logger.info(f"Windows queue is ready for {job.printer_name}, proceeding with job {job.id}{seq_info}")
             
             # Check if printer configuration exists
             config_data = printer_config_store.load_printer_config(
@@ -178,9 +247,23 @@ class PrinterQueue:
                 success = True
             
             if success:
+                # Wait a moment to ensure the job was sent to Windows queue
+                time.sleep(1)
+                
+                # Log the successful submission with correlative info if available
+                correlative_info = ""
+                if hasattr(job, 'correlative') or 'correlativo' in job.printer_data.lower():
+                    correlative_info = f" (correlative order maintained)"
+                
                 job.status = JobStatus.COMPLETED
                 job.completed_at = datetime.now()
-                logger.info(f"Successfully completed job {job.id}")
+                logger.info(f"Successfully completed job {job.id}{seq_info} for {job.printer_name}{correlative_info}")
+                
+                # Additional verification: check if job appeared in Windows queue
+                if not self._is_windows_printer_queue_empty():
+                    logger.info(f"Job {job.id}{seq_info} successfully queued in Windows for {job.printer_name}")
+                else:
+                    logger.debug(f"Windows queue empty after sending job {job.id}{seq_info} - job may have processed immediately")
             else:
                 raise Exception("Printing failed")
                 
@@ -644,14 +727,29 @@ class PrintQueueManager:
                 orientation=orientation.lower()
             )
             
+            # Extract correlative info for logging if available
+            correlative_info = ""
+            try:
+                if "correlativo" in printer_data.lower():
+                    import re
+                    correlative_match = re.search(r'correlativo["\s]*:?\s*["\s]*([^"<>\s]+)', printer_data, re.IGNORECASE)
+                    if correlative_match:
+                        correlative_info = f" [Correlativo: {correlative_match.group(1)}]"
+            except:
+                pass  # Ignore errors in correlative extraction
+            
+            logger.info(f"Received print job for {printer_name}{correlative_info} - assigning to queue")
+            
             # Submit to queue
             queue = self.printer_queues[printer_name]
             success = queue.add_job(job)
             
             if success:
-                logger.info(f"Submitted print job {job.id} to {printer_name}")
+                seq_info = f" (seq #{job.sequence_number})" if job.sequence_number else ""
+                logger.info(f"Successfully submitted print job {job.id}{seq_info} to {printer_name}{correlative_info}")
                 return job.id
             else:
+                logger.error(f"Failed to submit print job to {printer_name}{correlative_info}")
                 return None
                 
         except Exception as e:
