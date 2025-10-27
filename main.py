@@ -144,6 +144,44 @@ def get_queue_status():
         logger.error(f"Error in queue-status endpoint: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/jobs/unprinted', methods=['GET'])
+@cross_origin()
+def get_unprinted_jobs():
+    """List jobs that are pending, retrying, or failed."""
+    try:
+        printer_name = request.args.get('printer')
+        jobs = printing_service.get_unprinted_jobs(printer_name)
+        return jsonify({'jobs': jobs})
+    except Exception as e:
+        logger.error(f"Error retrieving unprinted jobs: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/jobs/<job_id>/retry', methods=['POST'])
+@cross_origin()
+def retry_job(job_id):
+    """Requeue a specific job for another attempt."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        reset_attempts = bool(payload.get('reset_attempts', False))
+        job = printing_service.requeue_job(job_id, reset_attempts=reset_attempts)
+        if job:
+            return jsonify({'status': 'OK', 'job': job})
+        return jsonify({'status': 'ERROR', 'message': 'Job not found'}), 404
+    except Exception as e:
+        logger.error(f"Error retrying job {job_id}: {e}")
+        return jsonify({'status': 'ERROR', 'message': str(e)}), 500
+
+@app.route('/printers/<printer_name>/resume', methods=['POST'])
+@cross_origin()
+def resume_printer(printer_name):
+    """Resume a paused printer queue."""
+    try:
+        printing_service.resume_printer_queue(printer_name)
+        return jsonify({'status': 'OK'})
+    except Exception as e:
+        logger.error(f"Error resuming printer {printer_name}: {e}")
+        return jsonify({'status': 'ERROR', 'message': str(e)}), 500
+
 def shutdown_handler():
     """Graceful shutdown handler"""
     logger.info("Shutting down print service...")

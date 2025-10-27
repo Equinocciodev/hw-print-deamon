@@ -61,9 +61,16 @@ class Printing(object):
         """
         try:
             if printer_name:
-                return print_queue_manager.get_printer_queue_status(printer_name)
+                status = print_queue_manager.get_printer_queue_status(printer_name) or {}
+                status['sequence_gaps'] = print_queue_manager.detect_sequence_gaps(printer_name)
+                status['unprinted_jobs'] = print_queue_manager.get_unprinted_jobs(printer_name)
+                return status
             else:
-                return print_queue_manager.get_all_queue_status()
+                all_status = print_queue_manager.get_all_queue_status()
+                for name, info in all_status.items():
+                    info['sequence_gaps'] = print_queue_manager.detect_sequence_gaps(name)
+                    info['unprinted_jobs'] = print_queue_manager.get_unprinted_jobs(name)
+                return all_status
         except Exception as e:
             logger.error(f"Error getting printer status: {e}")
             return {}
@@ -119,3 +126,26 @@ class Printing(object):
             logger.info("Printing system shutdown complete")
         except Exception as e:
             logger.error(f"Error during printing system shutdown: {e}") 
+
+    def get_unprinted_jobs(self, printer_name=None):
+        """Expose unprinted job list for monitoring."""
+        try:
+            return print_queue_manager.get_unprinted_jobs(printer_name)
+        except Exception as e:
+            logger.error(f"Error retrieving unprinted jobs: {e}")
+            return []
+
+    def requeue_job(self, job_id, reset_attempts=False):
+        """Allow manual requeue of a failed job."""
+        try:
+            return print_queue_manager.requeue_job(job_id, reset_attempts=reset_attempts)
+        except Exception as e:
+            logger.error(f"Error requeuing job {job_id}: {e}")
+            return None
+
+    def resume_printer_queue(self, printer_name):
+        """Resume a paused printer queue."""
+        try:
+            print_queue_manager.resume_printer(printer_name)
+        except Exception as e:
+            logger.error(f"Error resuming printer {printer_name}: {e}")

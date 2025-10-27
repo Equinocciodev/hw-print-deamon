@@ -3,7 +3,6 @@ Print Manager with Logical Queues
 Manages logical print queues per printer and processes jobs using stored configurations
 """
 import threading
-import queue
 import time
 import uuid
 import logging
@@ -11,9 +10,11 @@ from typing import Dict, Optional, Any, List
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import re
 
 from lib.config_store import printer_config_store
 from lib import pdf
+from lib.job_store import job_store, JobRecord
 import win32print
 import win32api
 
@@ -45,6 +46,13 @@ class PrintJob:
     pdf_file: str = ""
     pages: int = 1
     sequence_number: Optional[int] = None  # For tracking order within printer queue
+    attempts: int = 0
+    max_attempts: int = 3
+    available_at: Optional[datetime] = None
+    external_sequence: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    verification_status: str = "pending"
+    verification_message: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert job to dictionary"""
@@ -59,8 +67,44 @@ class PrintJob:
             'error_message': self.error_message,
             'pdf_file': self.pdf_file,
             'pages': self.pages,
-            'sequence_number': self.sequence_number
+            'sequence_number': self.sequence_number,
+            'attempts': self.attempts,
+            'max_attempts': self.max_attempts,
+            'available_at': self.available_at.isoformat() if self.available_at else None,
+            'external_sequence': self.external_sequence,
+            'metadata': self.metadata,
+            'verification_status': self.verification_status,
+            'verification_message': self.verification_message
         }
+
+    @classmethod
+    def from_record(cls, record: JobRecord) -> "PrintJob":
+        """Create a PrintJob instance from a JobRecord."""
+        try:
+            status = JobStatus(record.status)
+        except ValueError:
+            status = JobStatus.QUEUED
+        return cls(
+            id=record.id,
+            printer_name=record.printer_name,
+            printer_data=record.payload,
+            orientation=record.orientation,
+            status=status,
+            created_at=record.created_at,
+            started_at=record.started_at,
+            completed_at=record.completed_at,
+            error_message=record.error_message or "",
+            pdf_file=record.pdf_file or "",
+            pages=record.pages or 1,
+            sequence_number=record.sequence_number,
+            attempts=record.attempts,
+            max_attempts=record.max_attempts,
+            available_at=record.available_at,
+            external_sequence=record.external_sequence,
+            metadata=record.metadata or {},
+            verification_status=record.verification_status or "pending",
+            verification_message=record.verification_message or ""
+        )
 
 
 class PrinterQueue:
@@ -69,14 +113,20 @@ class PrinterQueue:
     def __init__(self, printer_name: str):
         self.printer_name = printer_name
         self.printer_type = "local"  # Default type, will be updated when detected
-        self.queue = queue.Queue()
         self.current_job: Optional[PrintJob] = None
         self.job_history: List[PrintJob] = []
         self.is_processing = False
         self.worker_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
-        self.sequence_counter = 0  # For tracking job order
-        self.sequence_lock = threading.Lock()  # Thread-safe sequence numbering
+        self.new_job_event = threading.Event()
+        self.printer_state_lock = threading.Lock()
+        self._pause_logged = False
+        
+        # Recover any stuck jobs before starting
+        try:
+            job_store.recover_stuck_jobs(self.printer_name)
+        except Exception as exc:
+            logger.error("Failed to recover jobs for %s: %s", self.printer_name, exc)
         
         # Start worker thread
         self.start_worker()
@@ -88,6 +138,7 @@ class PrinterQueue:
             self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
             self.worker_thread.start()
             logger.info(f"Started worker thread for printer: {self.printer_name}")
+            self.new_job_event.set()
     
     def stop_worker(self):
         """Stop the worker thread"""
@@ -96,29 +147,17 @@ class PrinterQueue:
             self.worker_thread.join(timeout=5)
             logger.info(f"Stopped worker thread for printer: {self.printer_name}")
     
-    def add_job(self, job: PrintJob) -> bool:
-        """Add a job to the queue with sequential numbering"""
-        try:
-            # Assign sequence number for order tracking
-            with self.sequence_lock:
-                self.sequence_counter += 1
-                job.sequence_number = self.sequence_counter
-            
-            job.status = JobStatus.QUEUED
-            self.queue.put(job)
-            logger.info(f"Added job {job.id} (seq #{job.sequence_number}) to queue for printer {self.printer_name}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to add job to queue: {e}")
-            return False
-    
     def get_queue_status(self) -> Dict[str, Any]:
         """Get current queue status"""
+        printer_state = job_store.get_printer_state(self.printer_name)
         return {
             'printer_name': self.printer_name,
             'printer_type': self.printer_type,
-            'queue_size': self.queue.qsize(),
+            'queue_size': job_store.count_pending(self.printer_name),
             'is_processing': self.is_processing,
+            'paused': printer_state.get('paused', False),
+            'pause_reason': printer_state.get('pause_reason'),
+            'last_sequence_processed': printer_state.get('last_sequence_processed'),
             'current_job': self.current_job.to_dict() if self.current_job else None,
             'recent_jobs': [job.to_dict() for job in self.job_history[-10:]]  # Last 10 jobs
         }
@@ -151,138 +190,213 @@ class PrinterQueue:
         
         while not self.stop_event.is_set():
             try:
-                # Get next job with timeout
-                try:
-                    job = self.queue.get(timeout=1.0)
-                except queue.Empty:
+                # Wait until new jobs arrive or retry interval expires
+                self.new_job_event.wait(timeout=1.0)
+                self.new_job_event.clear()
+
+                if self.stop_event.is_set():
+                    break
+
+                printer_state = job_store.get_printer_state(self.printer_name)
+                if printer_state.get('paused'):
+                    if not getattr(self, "_pause_logged", False):
+                        logger.warning(
+                            "Printer %s queue is paused: %s",
+                            self.printer_name,
+                            printer_state.get('pause_reason') or "manual pause",
+                        )
+                        self._pause_logged = True
+                    time.sleep(2)
                     continue
-                
+                else:
+                    if getattr(self, "_pause_logged", False):
+                        logger.info("Printer %s queue resumed", self.printer_name)
+                        self._pause_logged = False
+
+                record = job_store.fetch_next_job(self.printer_name)
+                if not record:
+                    continue
+
+                job = PrintJob.from_record(record)
                 self.current_job = job
                 self.is_processing = True
-                
+
                 seq_info = f" (seq #{job.sequence_number})" if job.sequence_number else ""
-                logger.info(f"Worker for {self.printer_name} picked up job {job.id}{seq_info} from queue")
-                
-                # Process the job
-                self._process_job(job)
-                
-                # Mark queue task as done
-                self.queue.task_done()
-                logger.info(f"Worker for {self.printer_name} completed job {job.id}{seq_info}")
-                
-            except Exception as e:
-                seq_info = f" (seq #{self.current_job.sequence_number})" if hasattr(self, 'current_job') and self.current_job and self.current_job.sequence_number else ""
-                logger.error(f"Error in worker loop for {self.printer_name} processing job {self.current_job.id if hasattr(self, 'current_job') and self.current_job else 'unknown'}{seq_info}: {e}")
-                if hasattr(self, 'current_job') and self.current_job:
-                    self.current_job.status = JobStatus.FAILED
-                    self.current_job.error_message = str(e)
-                    self.job_history.append(self.current_job)
-                    self.queue.task_done()
-                time.sleep(1)
-            finally:
-                self.current_job = None
-                self.is_processing = False
-        
-        logger.info(f"Worker loop stopped for printer: {self.printer_name}")
-    
-    def _process_job(self, job: PrintJob):
-        """Process a single print job using native Windows printing"""
-        try:
-            self.current_job = job
-            self.is_processing = True
-            job.status = JobStatus.PROCESSING
-            job.started_at = datetime.now()
-            
-            seq_info = f" (seq #{job.sequence_number})" if job.sequence_number else ""
-            logger.info(f"Processing job {job.id}{seq_info} for printer {job.printer_name}")
-            
-            # CRITICAL: Wait for Windows printer queue to be empty before proceeding
-            # This ensures sequential processing and prevents correlative jumps
-            logger.info(f"Waiting for Windows queue to be empty for {job.printer_name}{seq_info}...")
-            max_wait_time = 300  # 5 minutes maximum wait
-            wait_start = time.time()
-            
-            while not self._is_windows_printer_queue_empty():
-                if time.time() - wait_start > max_wait_time:
-                    logger.warning(f"Timeout waiting for Windows queue to clear for {job.printer_name}{seq_info}")
-                    break
-                    
-                logger.debug(f"Windows queue not empty for {job.printer_name}{seq_info}, waiting 2 seconds...")
+                logger.info(f"Worker for {self.printer_name} picked up job {job.id}{seq_info} (attempt {job.attempts}/{job.max_attempts})")
+
+                try:
+                    process_result = self._process_job(job)
+                    job_store.mark_job_completed(
+                        job.id,
+                        pdf_file=process_result.get('pdf_file'),
+                        pages=process_result.get('pages'),
+                        verification_message=process_result.get('verification_message'),
+                    )
+
+                    job.status = JobStatus.COMPLETED
+                    job.completed_at = datetime.now()
+                    job.verification_status = "verified"
+                    job.verification_message = process_result.get('verification_message', "")
+                    job.pdf_file = process_result.get('pdf_file', job.pdf_file)
+                    job.pages = process_result.get('pages', job.pages)
+
+                    logger.info(f"Worker for {self.printer_name} completed job {job.id}{seq_info}")
+
+                except Exception as e:
+                    error_message = str(e)
+                    logger.error(
+                        "Error processing job %s for printer %s: %s",
+                        job.id,
+                        self.printer_name,
+                        error_message,
+                        exc_info=True,
+                    )
+                    job.status = JobStatus.FAILED
+                    job.error_message = error_message
+                    job.completed_at = datetime.now()
+
+                    fail_info = job_store.mark_job_failed(job.id, error=error_message)
+                    if fail_info.get("paused"):
+                        logger.error(
+                            "Printer %s queue paused due to job %s failures. Manual intervention required.",
+                            self.printer_name,
+                            job.id,
+                        )
+                        self._pause_logged = True
+                    else:
+                        logger.info(
+                            "Job %s scheduled for retry (%d/%d)",
+                            job.id,
+                            fail_info.get("attempts"),
+                            fail_info.get("max_attempts"),
+                        )
+                        # Wake up worker around retry time
+                        self._schedule_retry_wakeup(fail_info.get("retry_at"))
+
+                finally:
+                    self.job_history.append(job)
+                    if len(self.job_history) > 50:
+                        self.job_history = self.job_history[-50:]
+                    self.current_job = None
+                    self.is_processing = False
+
+            except Exception as loop_error:
+                logger.exception("Unexpected error in worker loop for %s: %s", self.printer_name, loop_error)
                 time.sleep(2)
-                
-                # Check if we should stop
-                if self.stop_event.is_set():
-                    raise Exception("Worker stopped while waiting for queue")
-            
-            logger.info(f"Windows queue is ready for {job.printer_name}, proceeding with job {job.id}{seq_info}")
-            
-            # Check if printer configuration exists
-            config_data = printer_config_store.load_printer_config(
-                job.printer_name, job.orientation.lower())
-            
-            if not config_data:
-                raise Exception(f"No configuration found for {job.printer_name}:{job.orientation}")
-            
-            devmode_data, devnames_data, metadata = config_data
-            
-            # Generate PDF
-            job.status = JobStatus.PROCESSING
-            job.pdf_file = pdf.generate(job.printer_data, job.orientation)
-            
-            if not job.pdf_file:
-                raise Exception("Failed to generate PDF")
-            
-            # Apply printer configuration and print using native Windows API
-            job.status = JobStatus.PRINTING
-            
-            # For dot-matrix printers, try Ghostscript method first
-            if any(model in job.printer_name.upper() for model in ['FX-2190', 'LX-350', 'ESC/P']):
-                logger.info(f"Detected dot-matrix printer {job.printer_name}, using Ghostscript method")
-                if self._print_pdf_ghostscript(job.pdf_file, job.printer_name, devmode_data, job.orientation):
-                    success = True
-                else:
-                    logger.warning("Ghostscript method failed, trying native method")
-                    success = True
-            else:
-                success = True
-            
-            if success:
-                # Wait a moment to ensure the job was sent to Windows queue
-                time.sleep(1)
-                
-                # Log the successful submission with correlative info if available
-                correlative_info = ""
-                if hasattr(job, 'correlative') or 'correlativo' in job.printer_data.lower():
-                    correlative_info = f" (correlative order maintained)"
-                
-                job.status = JobStatus.COMPLETED
-                job.completed_at = datetime.now()
-                logger.info(f"Successfully completed job {job.id}{seq_info} for {job.printer_name}{correlative_info}")
-                
-                # Additional verification: check if job appeared in Windows queue
-                if not self._is_windows_printer_queue_empty():
-                    logger.info(f"Job {job.id}{seq_info} successfully queued in Windows for {job.printer_name}")
-                else:
-                    logger.debug(f"Windows queue empty after sending job {job.id}{seq_info} - job may have processed immediately")
-            else:
-                raise Exception("Printing failed")
-                
-        except Exception as e:
-            job.status = JobStatus.FAILED
-            job.error_message = str(e)
-            job.completed_at = datetime.now()
-            logger.error(f"Failed to process job {job.id}: {e}")
-            
-        finally:
-            # Add to history and cleanup
-            self.job_history.append(job)
-            
-            # Keep only last 50 jobs in history
-            if len(self.job_history) > 50:
-                self.job_history = self.job_history[-50:]
-            
-            self.current_job = None
-            self.is_processing = False
+
+        logger.info(f"Worker loop stopped for printer: {self.printer_name}")
+
+    def _schedule_retry_wakeup(self, retry_at_iso: Optional[str]) -> None:
+        """Schedule a wake-up call for the worker when a retry is due."""
+        if not retry_at_iso:
+            self.new_job_event.set()
+            return
+
+        try:
+            retry_at = datetime.fromisoformat(retry_at_iso)
+        except ValueError:
+            self.new_job_event.set()
+            return
+
+        delay = max((retry_at - datetime.utcnow()).total_seconds(), 0)
+
+        def _wake_later():
+            if delay > 0:
+                time.sleep(delay)
+            self.new_job_event.set()
+
+        threading.Thread(target=_wake_later, daemon=True).start()
+
+    def notify_new_job(self):
+        """Wake up the worker loop to process new jobs."""
+        self.new_job_event.set()
+        
+    def _process_job(self, job: PrintJob) -> Dict[str, Any]:
+        """Process a single print job and return verification details."""
+        self.current_job = job
+        self.is_processing = True
+        job.status = JobStatus.PROCESSING
+        job.started_at = datetime.now()
+
+        seq_info = f" (seq #{job.sequence_number})" if job.sequence_number else ""
+        logger.info(f"Processing job {job.id}{seq_info} for printer {job.printer_name}")
+
+        # Wait for Windows queue to drain to keep strict order
+        logger.info(f"Waiting for Windows queue to be empty for {job.printer_name}{seq_info}...")
+        max_wait_time = 300  # 5 minutes maximum wait
+        wait_start = time.time()
+
+        while not self._is_windows_printer_queue_empty():
+            if time.time() - wait_start > max_wait_time:
+                logger.warning(f"Timeout waiting for Windows queue to clear for {job.printer_name}{seq_info}")
+                break
+
+            logger.debug(f"Windows queue not empty for {job.printer_name}{seq_info}, waiting 2 seconds...")
+            time.sleep(2)
+
+            if self.stop_event.is_set():
+                raise RuntimeError("Worker stopped while waiting for queue to clear")
+
+        logger.info(f"Windows queue ready for {job.printer_name}, continuing with job {job.id}{seq_info}")
+
+        config_data = printer_config_store.load_printer_config(
+            job.printer_name, job.orientation.lower()
+        )
+        if not config_data:
+            raise RuntimeError(f"No configuration found for {job.printer_name}:{job.orientation}")
+
+        devmode_data, devnames_data, stored_metadata = config_data
+        if stored_metadata:
+            job.metadata.update(stored_metadata)
+
+        job.pdf_file = pdf.generate(job.printer_data, job.orientation)
+        if not job.pdf_file:
+            raise RuntimeError("Failed to generate PDF")
+
+        job.status = JobStatus.PRINTING
+        job_store.mark_job_printing(job.id)
+
+        success = False
+        verification_message = ""
+
+        if self._is_dot_matrix_printer(job.printer_name):
+            logger.info(f"Detected dot-matrix printer {job.printer_name}, using Ghostscript method")
+            success = self._print_pdf_ghostscript(job.pdf_file, job.printer_name, devmode_data, job.orientation)
+            if not success:
+                logger.warning("Ghostscript method failed, attempting native printing fallback")
+                success = self._print_pdf_native(job.pdf_file, job.printer_name, devmode_data)
+        else:
+            success = self._print_pdf_native(job.pdf_file, job.printer_name, devmode_data)
+
+        if not success:
+            raise RuntimeError("Printing failed")
+
+        # Verification: ensure the job entered the Windows spooler
+        time.sleep(1)
+        if not self._is_windows_printer_queue_empty():
+            verification_message = "Job accepted into Windows spooler"
+            logger.info(f"Job {job.id}{seq_info} successfully queued in Windows for {job.printer_name}")
+        else:
+            verification_message = "Windows queue empty post-print; assuming immediate completion"
+            logger.debug(f"Windows queue empty after sending job {job.id}{seq_info}")
+
+        correlative_info = ""
+        if job.external_sequence:
+            correlative_info = f" (seq {job.external_sequence})"
+
+        logger.info(f"Successfully processed job {job.id}{seq_info}{correlative_info} for {job.printer_name}")
+
+        return {
+            'pdf_file': job.pdf_file,
+            'pages': job.pages,
+            'verification_message': verification_message,
+        }
+    
+    def _is_dot_matrix_printer(self, printer_name: str) -> bool:
+        """Heuristic to detect dot-matrix printers that work better with Ghostscript."""
+        dot_matrix_signatures = ['FX-2190', 'LX-350', 'ESC/P', 'LQ-590', 'LQ-2090', 'LQ-310']
+        upper_name = printer_name.upper()
+        return any(signature in upper_name for signature in dot_matrix_signatures)
     
     def _extract_orientation_from_devmode(self, devmode_data: bytes) -> str:
         """Extract orientation from DEVMODE data"""
@@ -693,6 +807,43 @@ class PrintQueueManager:
         except Exception as e:
             logger.error(f"Error refreshing printer queues: {e}")
     
+    @staticmethod
+    def _extract_job_metadata(printer_data: str) -> Dict[str, Any]:
+        """Extract sequence/correlative hints from payload for traceability."""
+        metadata: Dict[str, Any] = {}
+        try:
+            sequence_patterns = [
+                r'"seq"\s*[:=]\s*"([^"]+)"',
+                r'"sequence"\s*[:=]\s*"([^"]+)"',
+                r'\bseq(?:uencia)?\b\s*[:=]\s*[\'"]?([A-Za-z0-9\-\/]+)',
+            ]
+            correlativo_patterns = [
+                r'"correlativo"\s*[:=]\s*"([^"]+)"',
+                r'\bcorrelativo\b\s*[:=]\s*[\'"]?([A-Za-z0-9\-\/]+)',
+            ]
+
+            for pattern in sequence_patterns:
+                match = re.search(pattern, printer_data, re.IGNORECASE)
+                if match:
+                    metadata.setdefault('sequence', match.group(1).strip())
+                    break
+
+            for pattern in correlativo_patterns:
+                match = re.search(pattern, printer_data, re.IGNORECASE)
+                if match:
+                    metadata.setdefault('correlativo', match.group(1).strip())
+                    break
+
+            if 'sequence' in metadata:
+                metadata['sequence_source'] = 'payload'
+            if 'correlativo' in metadata:
+                metadata['correlativo_source'] = 'payload'
+
+        except Exception as exc:
+            logger.debug("Failed to extract metadata from payload: %s", exc)
+
+        return metadata
+
     def submit_print_job(self, printer_name: str, printer_data: str, orientation: str) -> Optional[str]:
         """
         Submit a print job to the appropriate queue.
@@ -720,41 +871,75 @@ class PrintQueueManager:
                 raise Exception(f"Printer {printer_name} is not configured for {orientation} orientation. "
                               f"Please configure it in the Print Queue Manager.")
             
-            # Create print job
-            job = PrintJob(
-                printer_name=printer_name,
-                printer_data=printer_data,
-                orientation=orientation.lower()
+            job_id = str(uuid.uuid4())
+            metadata = self._extract_job_metadata(printer_data)
+            external_sequence = metadata.get('sequence') or metadata.get('correlativo')
+
+            logger.info(
+                "Received print job for %s (orientation=%s, seq=%s) - storing in persistent queue",
+                printer_name,
+                orientation.lower(),
+                external_sequence or "n/a",
             )
-            
-            # Extract correlative info for logging if available
-            correlative_info = ""
-            try:
-                if "correlativo" in printer_data.lower():
-                    import re
-                    correlative_match = re.search(r'correlativo["\s]*:?\s*["\s]*([^"<>\s]+)', printer_data, re.IGNORECASE)
-                    if correlative_match:
-                        correlative_info = f" [Correlativo: {correlative_match.group(1)}]"
-            except:
-                pass  # Ignore errors in correlative extraction
-            
-            logger.info(f"Received print job for {printer_name}{correlative_info} - assigning to queue")
-            
-            # Submit to queue
+
+            record = job_store.enqueue_job(
+                job_id=job_id,
+                printer_name=printer_name,
+                orientation=orientation.lower(),
+                payload=printer_data,
+                external_sequence=external_sequence,
+                metadata=metadata,
+            )
+
             queue = self.printer_queues[printer_name]
-            success = queue.add_job(job)
-            
-            if success:
-                seq_info = f" (seq #{job.sequence_number})" if job.sequence_number else ""
-                logger.info(f"Successfully submitted print job {job.id}{seq_info} to {printer_name}{correlative_info}")
-                return job.id
-            else:
-                logger.error(f"Failed to submit print job to {printer_name}{correlative_info}")
-                return None
+            queue.notify_new_job()
+
+            logger.info(
+                "Persisted and queued print job %s (seq #%s, external=%s) for %s",
+                record.id,
+                record.sequence_number,
+                external_sequence or "n/a",
+                printer_name,
+            )
+            return record.id
                 
         except Exception as e:
             logger.error(f"Error submitting print job: {e}")
             raise
+    
+    def get_unprinted_jobs(self, printer_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return pending/failed jobs for monitoring and recovery."""
+        records = job_store.get_unprinted_jobs(printer_name)
+        jobs: List[Dict[str, Any]] = []
+        for record in records:
+            try:
+                jobs.append(PrintJob.from_record(record).to_dict())
+            except Exception as exc:
+                logger.debug("Failed to convert job record %s: %s", record.id, exc)
+        return jobs
+
+    def requeue_job(self, job_id: str, *, reset_attempts: bool = False) -> Optional[Dict[str, Any]]:
+        """Requeue a specific job (for manual recovery)."""
+        record = job_store.requeue_job(job_id, reset_attempts=reset_attempts)
+        if not record:
+            return None
+
+        queue = self.printer_queues.get(record.printer_name)
+        if queue:
+            queue.notify_new_job()
+
+        return PrintJob.from_record(record).to_dict()
+
+    def resume_printer(self, printer_name: str) -> None:
+        """Resume a paused printer queue."""
+        job_store.resume_printer(printer_name)
+        queue = self.printer_queues.get(printer_name)
+        if queue:
+            queue.notify_new_job()
+
+    def detect_sequence_gaps(self, printer_name: str) -> List[Dict[str, Any]]:
+        """Inspect stored jobs to detect gaps in recorded sequences."""
+        return job_store.detect_sequence_gaps(printer_name)
     
     def get_all_queue_status(self) -> Dict[str, Any]:
         """Get status of all printer queues"""
